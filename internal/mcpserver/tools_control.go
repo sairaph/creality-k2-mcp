@@ -316,7 +316,7 @@ func controlFailure(err error) *mcp.CallToolResult {
 func policyErrorHint(err *policy.Error) string {
 	switch err.Code {
 	case policy.CodeForbidden:
-		return "Enable allow_control for this printer in the registry, or in the install wizard/TUI settings, then retry."
+		return "Only the user can allow control, and this server has no tool for it: ask them to run `creality_k2_mcp printers control on <printer id>` (or turn control on in the install wizard or TUI), then retry."
 	case policy.CodeInvalidInput:
 		return "Adjust the value to fit the stated range or configured band, or widen the band in settings, then call again."
 	case policy.CodeConflict:

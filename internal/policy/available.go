@@ -22,7 +22,24 @@ func (p *Policy) Available(printer domain.Printer, snap printerstate.Snapshot, s
 		pending = p.locks.get(identity).getPending()
 	}
 	derived := printerstate.DeriveActivityState(snap, pending)
-	return AvailableFor(derived, settings)
+	return GatesFor(printer, derived, settings)
+}
+
+// GatesFor is AvailableFor plus the per-printer allow_control gate: Execute
+// refuses every write for a printer without allow_control before looking at
+// state at all, so the preview must say the same. Without this an idle
+// printer with control off listed set_light as available and the AI learned
+// the refusal only by trying. Every caller that shows actions for a specific
+// printer uses this, not AvailableFor.
+func GatesFor(printer domain.Printer, derived printerstate.Derived, settings domain.Settings) []printerstate.ActionGate {
+	gates := AvailableFor(derived, settings)
+	for i := range gates {
+		if err := checkAllowControl(ActionName(gates[i].Name), printer); err != nil {
+			gates[i].Status = "blocked"
+			gates[i].Reason = err.Message
+		}
+	}
+	return gates
 }
 
 // AvailableFor is Available's pure core: it needs only the derived state

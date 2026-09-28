@@ -41,26 +41,26 @@ type PrinterClients func(p domain.Printer) printerstate.Deps
 // read.
 type PolicyExecutor interface {
 	// Actions reports the gated availability of every named action for one
-	// printer's current derived state, for StateBlock.Actions. pending is
-	// the same value passed to printerstate.DeriveActivityState for this
-	// snapshot.
-	Actions(derived printerstate.Derived, pending *printerstate.PendingAction) []printerstate.ActionGate
+	// printer's current derived state, for StateBlock.Actions, including the
+	// printer's own allow_control gate. pending is the same value passed to
+	// printerstate.DeriveActivityState for this snapshot.
+	Actions(printer domain.Printer, derived printerstate.Derived, pending *printerstate.PendingAction) []printerstate.ActionGate
 }
 
-// policyAvailableAdapter adapts internal/policy.AvailableFor (the exported,
-// pure core of policy.Policy.Available: every action's gate for a given
-// derived state and settings, dev_docs/safety-architecture.md section 3.2)
-// to the PolicyExecutor seam above, so get_printer_status's actions list
-// comes from internal/policy itself rather than being left empty. pending is
-// accepted (to satisfy the interface) but not used: every caller of
+// policyAvailableAdapter adapts internal/policy.GatesFor (every action's gate
+// for a given derived state and settings, dev_docs/safety-architecture.md
+// section 3.2, plus the printer's allow_control gate) to the PolicyExecutor
+// seam above, so get_printer_status's actions list comes from
+// internal/policy itself rather than being left empty. pending is accepted
+// (to satisfy the interface) but not used: every caller of
 // PolicyExecutor.Actions today derives its Derived value with a nil pending
 // already, and Derived's own Bucket/Class already reflect whatever pending
 // transition was live when it was computed (P2, printerstate.Derived's own
-// doc comment); AvailableFor needs only Derived and settings.
+// doc comment).
 type policyAvailableAdapter struct{ settings domain.Settings }
 
-func (a policyAvailableAdapter) Actions(derived printerstate.Derived, _ *printerstate.PendingAction) []printerstate.ActionGate {
-	return policy.AvailableFor(derived, a.settings)
+func (a policyAvailableAdapter) Actions(printer domain.Printer, derived printerstate.Derived, _ *printerstate.PendingAction) []printerstate.ActionGate {
+	return policy.GatesFor(printer, derived, a.settings)
 }
 
 // policyDeps builds the internal/policy.Deps a control-tool write needs for

@@ -950,6 +950,24 @@ func TestControlToolForbiddenWhenAllowControlFalse(t *testing.T) {
 	if !res.IsError || !strings.Contains(text, "code: forbidden") || !strings.Contains(text, "allow_control") {
 		t.Fatalf("set_light forbidden reply = %s", text)
 	}
+	if !strings.Contains(text, "printers control on") {
+		t.Errorf("forbidden reply should name the command the user runs to allow control: %s", text)
+	}
+
+	// The status actions list must agree with the refusal instead of
+	// listing set_light as available on an idle printer.
+	status := strings.Join(texts(call(t, cs, "get_printer_status", nil)), "\n")
+	i := strings.Index(status, "name: set_light")
+	if i < 0 {
+		t.Fatalf("get_printer_status lists no set_light action:\n%s", status)
+	}
+	entry := status[i:]
+	if next := strings.Index(entry[1:], "- name:"); next >= 0 {
+		entry = entry[:next+1]
+	}
+	if !strings.Contains(entry, "status: blocked") || !strings.Contains(entry, "allow_control is false") {
+		t.Errorf("set_light action with control off = %q, want blocked because allow_control is false", entry)
+	}
 }
 
 // --- preset filtering ---

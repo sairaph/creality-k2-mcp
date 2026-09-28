@@ -37,8 +37,7 @@ func registerStatusTools(s *Server) {
 		Name: "get_printer_status",
 		Description: "Returns one printer's full current state: the derived activity state with its bucket, " +
 			"gating class and the reasons behind it, nozzle and bed temperatures and targets, fan speeds as a " +
-			"percent, speed and flow factors, the light, the side spool (filament_rack) reading, whether a " +
-			"CFS unit is connected, job identity, recent console activity, and, when a policy component is " +
+			"percent, speed and flow factors, the light, whether a CFS unit is connected, job identity, recent console activity, and, when a policy component is " +
 			"wired in, which actions are currently available, blocked or need confirmation. The body explains " +
 			"what the current state means in plain terms and gives the exact next call for it, for example " +
 			"what a resume would restore while paused, or how to clear an error. Call this before attempting " +
@@ -174,7 +173,7 @@ func getPrinterStatusHandler(s *Server) func(context.Context, *mcp.CallToolReque
 
 		var actions []printerstate.ActionGate
 		if s.deps.Policy != nil {
-			actions = s.deps.Policy.Actions(derived, nil)
+			actions = s.deps.Policy.Actions(printer, derived, nil)
 		}
 
 		front := &statusFront{StateBlock: block}
@@ -287,9 +286,16 @@ func statusGuidance(block printerstate.StateBlock) string {
 	var body string
 	switch block.ActivityState {
 	case printerstate.StateIdle, printerstate.StateComplete, printerstate.StateCancelled:
-		body = "The printer is idle and safe to start a new job. Call list_gcode_files to pick a file, then " +
-			"start_print (if control tools are enabled for this printer) to begin. Call get_current_job for " +
-			"the last job's summary."
+		if block.CFSConnected {
+			// The CFS note below explains the block; never call the printer
+			// "safe to start" in the same reply that refuses start_print.
+			body = "The printer is idle, but starting a new job is not possible right now (see below). Call " +
+				"get_current_job for the last job's summary."
+		} else {
+			body = "The printer is idle and safe to start a new job. Call list_gcode_files to pick a file, then " +
+				"start_print (if control tools are enabled for this printer) to begin. Call get_current_job for " +
+				"the last job's summary."
+		}
 	case printerstate.StatePrinting:
 		body = "A job is printing. Call get_current_job for its progress, current layer and ETA. If control " +
 			"tools are enabled, pause_print pauses it and cancel_print stops it (cancel_print needs the " +

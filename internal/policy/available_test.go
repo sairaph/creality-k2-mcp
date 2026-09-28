@@ -102,6 +102,29 @@ func TestAvailableFor_NeverGatesAWrite(t *testing.T) {
 	}
 }
 
+// A printer with allow_control off must show every action blocked, with the
+// same reason Execute refuses with, even ones its state would allow (the
+// idle set_light the live printer listed as available).
+func TestGatesFor_AllowControlOffBlocksEverything(t *testing.T) {
+	f := newFakePrinter()
+	printer := testPrinterValue(f)
+	printer.AllowControl = false
+	snap := printerstate.Take(context.Background(), f.deps().stateDeps(), printer)
+	derived := printerstate.DeriveActivityState(snap, nil)
+
+	want := checkAllowControl(ActionSetLight, printer).Message
+	for _, g := range GatesFor(printer, derived, testSettings()) {
+		if g.Status != "blocked" || g.Reason != want {
+			t.Errorf("%s: status %q reason %q, want blocked with %q", g.Name, g.Status, g.Reason, want)
+		}
+	}
+
+	printer.AllowControl = true
+	if g := gateStatus(t, GatesFor(printer, derived, testSettings()), ActionSetLight); g.Status != "available" {
+		t.Errorf("set_light with control on while idle: status %q, want available", g.Status)
+	}
+}
+
 // testPrinterValue also configures f's PrinterInfo to answer with the same
 // "avail-test" hostname (review backlog item 24: printerstate.Take now
 // always reads printer/info, and DeriveActivityState fails closed to

@@ -340,6 +340,21 @@ func TestStatusGuidanceCFSConnectedNote(t *testing.T) {
 	}
 }
 
+// An idle printer with the CFS connected must never be called "safe to
+// start" or steered to start_print in the same reply whose actions list
+// blocks start_print (D5).
+func TestStatusGuidanceIdleWithCFSDoesNotOfferStart(t *testing.T) {
+	for _, state := range []string{printerstate.StateIdle, printerstate.StateComplete, printerstate.StateCancelled} {
+		body := statusGuidance(printerstate.StateBlock{ActivityState: state, CFSConnected: true})
+		if strings.Contains(body, "safe to start") || strings.Contains(body, string(policy.ActionStartPrint)) {
+			t.Errorf("statusGuidance(%s, CFS connected) = %q, must not offer starting a job", state, body)
+		}
+		if !strings.Contains(body, "CFS unit reports connected") {
+			t.Errorf("statusGuidance(%s, CFS connected) = %q, missing the CFS note explaining why", state, body)
+		}
+	}
+}
+
 // --- get_printer_status ---
 
 func TestGetPrinterStatusIdleGuidance(t *testing.T) {
