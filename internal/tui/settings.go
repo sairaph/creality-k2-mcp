@@ -26,10 +26,9 @@ type settingsScreen struct {
 	ready    bool
 	loadErr  string
 
-	cursor       int
-	editing      bool
-	input        string
-	choiceCursor int
+	cursor  int
+	editing bool
+	input   string
 
 	saving  bool
 	message string
@@ -56,21 +55,29 @@ var settingsScreenRows = []settingsRow{
 	{key: "preset", label: "Tool preset", kind: settingsRowChoice,
 		help: "Which tools the AI can use: monitor (read only), camera (+ camera), or control (+ printing controls)."},
 	{key: "idle_heat_minutes", label: "Idle heat timeout (minutes)", kind: settingsRowInt,
-		help: "A heater set while idle turns off automatically after this many minutes."},
+		help: "A heater the AI turns on while the printer is idle turns off automatically after this many minutes."},
 	{key: "nozzle_band_c", label: "Nozzle band (C)", kind: settingsRowFloat,
-		help: "A mid-print nozzle temperature change may move at most this many degrees from the current target."},
+		help: settingsBandHelp("nozzle temperature: each change may move the target at most this many degrees")},
 	{key: "bed_band_c", label: "Bed band (C)", kind: settingsRowFloat,
-		help: "A mid-print bed temperature change may move at most this many degrees from the current target."},
+		help: settingsBandHelp("bed temperature: each change may move the target at most this many degrees")},
 	{key: "part_fan_min_percent_of_current", label: "Part fan floor (% of current)", kind: settingsRowFloat,
-		help: "A mid-print part fan change may not drop the fan below this percent of its current value."},
+		help: settingsBandHelp("part fan: a change may not drop the fan below this percent of its current speed")},
 	{key: "speed_factor_min_percent", label: "Speed factor min (%)", kind: settingsRowFloat,
-		help: "Lowest print speed factor a mid-print change may set."},
+		help: settingsBandHelp("print speed: lowest speed factor the AI may set")},
 	{key: "speed_factor_max_percent", label: "Speed factor max (%)", kind: settingsRowFloat,
-		help: "Highest print speed factor a mid-print change may set."},
+		help: settingsBandHelp("print speed: highest speed factor the AI may set")},
 	{key: "flow_factor_min_percent", label: "Flow factor min (%)", kind: settingsRowFloat,
-		help: "Lowest flow factor a mid-print change may set."},
+		help: settingsBandHelp("flow: lowest flow factor the AI may set")},
 	{key: "flow_factor_max_percent", label: "Flow factor max (%)", kind: settingsRowFloat,
-		help: "Highest flow factor a mid-print change may set."},
+		help: settingsBandHelp("flow: highest flow factor the AI may set")},
+}
+
+// settingsBandHelp prefixes a band's own rule with what every band shares:
+// it only limits the AI, only during a print, and never the file's own
+// settings.
+func settingsBandHelp(rule string) string {
+	return "AI limit during a print only; your gcode is never limited. " +
+		strings.ToUpper(rule[:1]) + rule[1:] + "."
 }
 
 var settingsPresetChoices = []domain.ToolPreset{domain.PresetMonitor, domain.PresetCamera, domain.PresetControl}
@@ -82,6 +89,23 @@ func settingsPresetIndex(p domain.ToolPreset) int {
 		}
 	}
 	return 0
+}
+
+// cycleSettingsPreset moves the tool preset dir steps through
+// settingsPresetChoices, wrapping at either end.
+func cycleSettingsPreset(p domain.ToolPreset, dir int) domain.ToolPreset {
+	n := len(settingsPresetChoices)
+	return settingsPresetChoices[(settingsPresetIndex(p)+dir+n)%n]
+}
+
+// isSettingsNumberKey reports whether a key press can start a number:
+// typing on a numeric row starts editing it with that character.
+func isSettingsNumberKey(m tea.KeyMsg) bool {
+	if m.Type != tea.KeyRunes || len(m.Runes) != 1 {
+		return false
+	}
+	r := m.Runes[0]
+	return (r >= '0' && r <= '9') || r == '.'
 }
 
 func settingsRowValue(cfg domain.Settings, key string) string {
@@ -252,55 +276,44 @@ func (s *settingsScreen) updateList(m tea.KeyMsg) tea.Cmd {
 		s.cursor = (s.cursor + 1) % len(settingsScreenRows)
 	case "r":
 		s.settings = domain.DefaultSettings()
-		s.message = "Recommended defaults restored; press s to save."
+		s.message = "Recommended defaults restored; press enter to save."
 	case "enter":
-		s.startEdit()
-	case "s":
 		s.saving = true
 		s.message = ""
 		return s.saveCmd()
+	default:
+		row := settingsScreenRows[s.cursor]
+		if row.kind == settingsRowChoice {
+			// The preset is drawn as a value to flip through, so it changes
+			// in place with no separate edit mode.
+			switch m.String() {
+			case "left", "h":
+				s.settings.Tools.Preset = cycleSettingsPreset(s.settings.Tools.Preset, -1)
+			case "right", "l", " ":
+				s.settings.Tools.Preset = cycleSettingsPreset(s.settings.Tools.Preset, 1)
+			}
+			return nil
+		}
+		switch {
+		case m.String() == "e":
+			s.startEdit(settingsRowValue(s.settings, row.key))
+		case isSettingsNumberKey(m):
+			s.startEdit(string(m.Runes))
+		}
 	}
 	return nil
 }
 
-func (s *settingsScreen) startEdit() {
-	row := settingsScreenRows[s.cursor]
+// startEdit opens the numeric editor on the highlighted row with input as
+// its starting text: the current value for "e", or the typed character.
+func (s *settingsScreen) startEdit(input string) {
 	s.editing = true
-	s.message = row.help
-	if row.kind == settingsRowChoice {
-		s.choiceCursor = settingsPresetIndex(s.settings.Tools.Preset)
-		return
-	}
-	s.input = settingsRowValue(s.settings, row.key)
+	s.message = ""
+	s.input = input
 }
 
 func (s *settingsScreen) updateEditing(m tea.KeyMsg) tea.Cmd {
 	row := settingsScreenRows[s.cursor]
-
-	if row.kind == settingsRowChoice {
-		// The value is drawn as "< camera >", so left/right are the keys a
-		// user reaches for first; up/down keep working too.
-		switch m.String() {
-		case "left", "h", "up", "k":
-			s.choiceCursor = (s.choiceCursor - 1 + len(settingsPresetChoices)) % len(settingsPresetChoices)
-		case "right", "l", "down", "j", " ":
-			s.choiceCursor = (s.choiceCursor + 1) % len(settingsPresetChoices)
-		case "enter":
-			cfg := s.settings
-			cfg.Tools.Preset = settingsPresetChoices[s.choiceCursor]
-			if err := domain.ValidateSettings(cfg); err != nil {
-				s.message = err.Error()
-				return nil
-			}
-			s.settings = cfg
-			s.editing = false
-			s.message = ""
-		case "esc":
-			s.editing = false
-			s.message = ""
-		}
-		return nil
-	}
 
 	switch m.String() {
 	case "enter":
@@ -359,26 +372,30 @@ func (s *settingsScreen) View() string {
 			cursor = tuiStyleCursor.Render(">")
 		}
 		value := settingsRowValue(s.settings, row.key)
-		if s.editing && i == s.cursor {
-			if row.kind == settingsRowChoice {
-				value = "< " + string(settingsPresetChoices[s.choiceCursor]) + " >"
-			} else {
-				value = s.input + "_"
-			}
+		switch {
+		case s.editing && i == s.cursor:
+			value = s.input + "_"
+		case row.kind == settingsRowChoice:
+			value = "< " + value + " >"
 		}
 		fmt.Fprintf(&b, " %s %-34s %s\n", cursor, row.label, value)
 	}
 
-	if s.message != "" {
-		b.WriteString("\n  " + s.message)
+	// A status message (an error, a save) wins; otherwise explain the
+	// highlighted row, so what each band means is always on screen.
+	message := s.message
+	if message == "" {
+		message = settingsScreenRows[s.cursor].help
 	}
+	b.WriteString("\n  " + message)
 
-	footer := "  ↑↓ move · enter edit · r restore defaults · s save · esc back"
+	change := "e edit"
+	if settingsScreenRows[s.cursor].kind == settingsRowChoice {
+		change = "←→ change"
+	}
+	footer := "  ↑↓ move · " + change + " · r restore defaults · enter save · esc back"
 	if s.editing {
 		footer = "  enter confirm · esc cancel"
-		if settingsScreenRows[s.cursor].kind == settingsRowChoice {
-			footer = "  ←→ change · enter confirm · esc cancel"
-		}
 	}
 	b.WriteString("\n\n" + tuiStyleDim.Render(footer))
 	return b.String()

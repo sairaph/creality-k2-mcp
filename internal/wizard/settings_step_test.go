@@ -75,9 +75,9 @@ func TestSettingsStepEditNumericField(t *testing.T) {
 	st.Settings.Settings = domain.DefaultSettings()
 	st.Settings.Cursor = 1 // idle_heat_minutes
 
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st) // start editing
+	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")}, st) // start editing
 	if !st.Settings.Editing {
-		t.Fatal("enter should start editing the selected row")
+		t.Fatal("e should start editing the selected row")
 	}
 	if st.Settings.Input != "15" {
 		t.Fatalf("Input = %q, want the current value %q", st.Settings.Input, "15")
@@ -137,37 +137,18 @@ func TestSettingsStepRejectsOutOfRangeBand(t *testing.T) {
 	}
 }
 
-func TestSettingsStepPresetCyclesAndValidates(t *testing.T) {
-	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings() // preset defaults to camera
-	st.Settings.Cursor = 0                          // preset row
-
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st) // start editing
-	if st.Settings.ChoiceCursor != presetIndex(domain.PresetCamera) {
-		t.Fatalf("ChoiceCursor = %d, want the index of the current preset", st.Settings.ChoiceCursor)
-	}
-
-	s.Update(tea.KeyMsg{Type: tea.KeyDown}, st)
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st) // confirm
-	if st.Settings.Settings.Tools.Preset != domain.PresetControl {
-		t.Errorf("preset = %q, want %q after cycling down from camera", st.Settings.Settings.Tools.Preset, domain.PresetControl)
-	}
-}
-
-// The preset is drawn as "< camera >", so left/right must change it and the
-// footer must say so (a real user could not find the up/down keys).
-func TestSettingsStepPresetChangesWithLeftRight(t *testing.T) {
+// The preset is drawn as "< camera >" and changes in place with left/right
+// (and space), with no edit mode, and the footer says so.
+func TestSettingsStepPresetChangesInPlace(t *testing.T) {
 	s := newSettingsStep()
 	st := &settingsTestState{}
 	st.Settings.Ready = true
 	st.Settings.Settings = domain.DefaultSettings() // camera
 	st.Settings.Cursor = 0                          // preset row
 
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st) // start editing
-	if !strings.Contains(s.View(st), "←→") {
-		t.Error("editing the preset should show a ←→ change hint")
+	view := s.View(st)
+	if !strings.Contains(view, "< camera >") || !strings.Contains(view, "←→ change") {
+		t.Errorf("preset row should read < camera > with a ←→ change hint:\n%s", view)
 	}
 	var hinted bool
 	for _, h := range s.Hints(st) {
@@ -176,20 +157,61 @@ func TestSettingsStepPresetChangesWithLeftRight(t *testing.T) {
 		}
 	}
 	if !hinted {
-		t.Error("Hints() should include ←→ while editing the preset")
+		t.Error("Hints() should include ←→ on the preset row")
 	}
 
 	s.Update(tea.KeyMsg{Type: tea.KeyRight}, st)
-	if got := presetChoices[st.Settings.ChoiceCursor]; got != domain.PresetControl {
+	if st.Settings.Editing {
+		t.Fatal("changing the preset must not open an edit mode")
+	}
+	if got := st.Settings.Settings.Tools.Preset; got != domain.PresetControl {
 		t.Fatalf("after right: %q, want %q", got, domain.PresetControl)
 	}
-	s.Update(tea.KeyMsg{Type: tea.KeyRight}, st) // wraps to monitor
-	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, st)  // back to control
-	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, st)  // camera
-	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, st)  // monitor
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st) // confirm
-	if st.Settings.Settings.Tools.Preset != domain.PresetMonitor {
-		t.Errorf("preset = %q, want %q", st.Settings.Settings.Tools.Preset, domain.PresetMonitor)
+	s.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}, st) // wraps to monitor
+	if got := st.Settings.Settings.Tools.Preset; got != domain.PresetMonitor {
+		t.Fatalf("after space: %q, want %q", got, domain.PresetMonitor)
+	}
+	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, st) // wraps back to control
+	if got := st.Settings.Settings.Tools.Preset; got != domain.PresetControl {
+		t.Fatalf("after left: %q, want %q", got, domain.PresetControl)
+	}
+}
+
+// A numeric row is edited with e (starting from the current value) or by
+// just typing a number (replacing it).
+func TestSettingsStepTypingStartsNumericEdit(t *testing.T) {
+	s := newSettingsStep()
+	st := &settingsTestState{}
+	st.Settings.Ready = true
+	st.Settings.Settings = domain.DefaultSettings()
+	st.Settings.Cursor = 2 // nozzle_band_c
+
+	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("8")}, st)
+	if !st.Settings.Editing || st.Settings.Input != "8" {
+		t.Fatalf("typing 8 should start editing with input 8, got editing=%v input=%q", st.Settings.Editing, st.Settings.Input)
+	}
+	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st)
+	if st.Settings.Editing || st.Settings.Settings.Bands.NozzleBandC != 8 {
+		t.Fatalf("enter should confirm 8, got editing=%v band=%v", st.Settings.Editing, st.Settings.Settings.Bands.NozzleBandC)
+	}
+
+	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")}, st)
+	if !st.Settings.Editing || st.Settings.Input != "8" {
+		t.Fatalf("e should edit the current value, got editing=%v input=%q", st.Settings.Editing, st.Settings.Input)
+	}
+}
+
+// The highlighted row's help is always shown, so what a band means is on
+// screen without opening anything.
+func TestSettingsStepViewExplainsHighlightedRow(t *testing.T) {
+	s := newSettingsStep()
+	st := &settingsTestState{}
+	st.Settings.Ready = true
+	st.Settings.Settings = domain.DefaultSettings()
+	st.Settings.Cursor = 2 // nozzle_band_c
+
+	if view := s.View(st); !strings.Contains(view, "your gcode is never limited") {
+		t.Errorf("View should explain the highlighted band:\n%s", view)
 	}
 }
 
@@ -224,12 +246,12 @@ func TestSettingsStepSaveAdvancesAndPersists(t *testing.T) {
 	st.Settings.Settings.IdleHeatMinutes = 42
 	st.Settings.Path = path
 
-	directive, cmd := s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")}, st)
+	directive, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st)
 	if directive != flow.Continue {
 		t.Fatalf("directive = %v, want Continue (the save runs as a tea.Cmd)", directive)
 	}
 	if cmd == nil {
-		t.Fatal("s should return a non-nil cmd that performs the save")
+		t.Fatal("enter should return a non-nil cmd that performs the save")
 	}
 	if !st.Settings.Saving {
 		t.Error("Saving should be true while the save cmd is in flight")
@@ -289,7 +311,7 @@ func TestSettingsStepDryRunNeverWrites(t *testing.T) {
 	st.Settings.Settings = domain.DefaultSettings()
 	st.Settings.Path = path
 
-	_, cmd := s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")}, st)
+	_, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st)
 	if cmd == nil {
 		t.Fatal("expected a non-nil save cmd")
 	}

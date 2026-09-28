@@ -311,7 +311,7 @@ func runWizard(ctx context.Context, detector *harness.Detector, scope harness.Sc
 	steps := []flow.Step[AppState]{
 		wizard.PrintersStep(ctx, printerState, wizard.PrintersStepOptions{Dir: registryDir(scope), DryRun: cmd.DryRun}),
 		wizard.SettingsStep(settingsState, wizard.SettingsStepOptions{DryRun: cmd.DryRun}),
-		installer.HarnessStep(ctx, detector, harnessState, installer.HarnessStepOptions{AllDetected: true, Scope: scope}),
+		wizard.HarnessStep(installer.HarnessStep(ctx, detector, harnessState, installer.HarnessStepOptions{AllDetected: true, Scope: scope}), harnessState),
 		installer.ApplyStep(ctx, detector, harnessState, resultsState, installer.ApplyStepOptions{Scope: scope, DryRun: cmd.DryRun}),
 	}
 	f := flow.New(steps, state)

@@ -39,9 +39,9 @@ func TestSettingsScreenEditAndSave(t *testing.T) {
 
 	// Cursor starts on "preset" (row 0); move to idle_heat_minutes (row 1).
 	s.Update(keyType(tea.KeyDown))
-	s.Update(keyType(tea.KeyEnter)) // start editing
+	s.Update(keyRune('e')) // start editing
 	if !s.editing {
-		t.Fatal("expected editing after enter")
+		t.Fatal("expected editing after e")
 	}
 	s.input = ""
 	for _, r := range "30" {
@@ -55,9 +55,9 @@ func TestSettingsScreenEditAndSave(t *testing.T) {
 		t.Fatalf("IdleHeatMinutes = %d, want 30", s.settings.IdleHeatMinutes)
 	}
 
-	cmd := s.Update(keyRune('s'))
+	cmd := s.Update(keyType(tea.KeyEnter))
 	if !s.saving {
-		t.Fatal("expected saving after s")
+		t.Fatal("expected saving after enter")
 	}
 	for _, m := range drainCmd(cmd) {
 		s.Update(m)
@@ -79,7 +79,7 @@ func TestSettingsScreenRejectsInvalidEdit(t *testing.T) {
 	isolateHome(t)
 	s := initSettingsScreen(t)
 	s.Update(keyType(tea.KeyDown))
-	s.Update(keyType(tea.KeyEnter))
+	s.Update(keyRune('e'))
 	s.input = "not a number"
 	s.Update(keyType(tea.KeyEnter))
 	if !s.editing {
@@ -90,26 +90,42 @@ func TestSettingsScreenRejectsInvalidEdit(t *testing.T) {
 	}
 }
 
-// The preset is drawn as "< camera >", so left/right must change it and the
-// footer must say so.
-func TestSettingsScreenPresetChangesWithLeftRight(t *testing.T) {
+// The preset is drawn as "< camera >" and changes in place with left/right,
+// with no edit mode, and the footer says so.
+func TestSettingsScreenPresetChangesInPlace(t *testing.T) {
 	isolateHome(t)
-	s := initSettingsScreen(t)
-	s.Update(keyType(tea.KeyEnter)) // cursor starts on preset
-	if !strings.Contains(s.View(), "←→ change") {
-		t.Error("editing the preset should show a ←→ change hint")
+	s := initSettingsScreen(t) // cursor starts on preset
+	view := s.View()
+	if !strings.Contains(view, "< camera >") || !strings.Contains(view, "←→ change") {
+		t.Errorf("preset row should read < camera > with a ←→ change hint:\n%s", view)
 	}
 	s.Update(keyType(tea.KeyRight))
-	s.Update(keyType(tea.KeyEnter))
+	if s.editing {
+		t.Fatal("changing the preset must not open an edit mode")
+	}
 	if s.settings.Tools.Preset != domain.PresetControl {
 		t.Fatalf("preset = %q after right from camera, want %q", s.settings.Tools.Preset, domain.PresetControl)
 	}
-	s.Update(keyType(tea.KeyEnter))
 	s.Update(keyType(tea.KeyLeft))
 	s.Update(keyType(tea.KeyLeft))
-	s.Update(keyType(tea.KeyEnter))
 	if s.settings.Tools.Preset != domain.PresetMonitor {
 		t.Errorf("preset = %q after two lefts from control, want %q", s.settings.Tools.Preset, domain.PresetMonitor)
+	}
+}
+
+// Typing a number on a numeric row starts editing it with that number.
+func TestSettingsScreenTypingStartsNumericEdit(t *testing.T) {
+	isolateHome(t)
+	s := initSettingsScreen(t)
+	s.Update(keyType(tea.KeyDown)) // idle_heat_minutes
+	s.Update(keyRune('3'))
+	s.Update(keyRune('0'))
+	if !s.editing || s.input != "30" {
+		t.Fatalf("editing=%v input=%q, want editing with 30", s.editing, s.input)
+	}
+	s.Update(keyType(tea.KeyEnter))
+	if s.editing || s.settings.IdleHeatMinutes != 30 {
+		t.Fatalf("editing=%v IdleHeatMinutes=%d, want 30 confirmed", s.editing, s.settings.IdleHeatMinutes)
 	}
 }
 

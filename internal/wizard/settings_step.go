@@ -18,12 +18,11 @@ type SettingsState struct {
 	Path     string
 	Ready    bool
 
-	Cursor       int
-	Editing      bool
-	Input        string
-	ChoiceCursor int
+	Cursor  int
+	Editing bool
+	Input   string
 
-	// Saving is true while the save "s" started is in flight, mirroring
+	// Saving is true while the save enter started is in flight, mirroring
 	// installer.ApplyStep's Done gating so a save runs as a tea.Cmd instead
 	// of blocking Update.
 	Saving bool
@@ -55,21 +54,28 @@ var settingsRows = []settingsRow{
 	{Key: "preset", Label: "Tool preset", Kind: rowChoice,
 		Help: "Which tools the AI can use: monitor (read only), camera (+ camera), or control (+ printing controls)."},
 	{Key: "idle_heat_minutes", Label: "Idle heat timeout (minutes)", Kind: rowInt,
-		Help: "A heater set while idle turns off automatically after this many minutes."},
+		Help: "A heater the AI turns on while the printer is idle turns off automatically after this many minutes."},
 	{Key: "nozzle_band_c", Label: "Nozzle band (C)", Kind: rowFloat,
-		Help: "A mid-print nozzle temperature change may move at most this many degrees from the current target."},
+		Help: bandHelp("nozzle temperature: each change may move the target at most this many degrees")},
 	{Key: "bed_band_c", Label: "Bed band (C)", Kind: rowFloat,
-		Help: "A mid-print bed temperature change may move at most this many degrees from the current target."},
+		Help: bandHelp("bed temperature: each change may move the target at most this many degrees")},
 	{Key: "part_fan_min_percent_of_current", Label: "Part fan floor (% of current)", Kind: rowFloat,
-		Help: "A mid-print part fan change may not drop the fan below this percent of its current value."},
+		Help: bandHelp("part fan: a change may not drop the fan below this percent of its current speed")},
 	{Key: "speed_factor_min_percent", Label: "Speed factor min (%)", Kind: rowFloat,
-		Help: "Lowest print speed factor a mid-print change may set."},
+		Help: bandHelp("print speed: lowest speed factor the AI may set")},
 	{Key: "speed_factor_max_percent", Label: "Speed factor max (%)", Kind: rowFloat,
-		Help: "Highest print speed factor a mid-print change may set."},
+		Help: bandHelp("print speed: highest speed factor the AI may set")},
 	{Key: "flow_factor_min_percent", Label: "Flow factor min (%)", Kind: rowFloat,
-		Help: "Lowest flow factor a mid-print change may set."},
+		Help: bandHelp("flow: lowest flow factor the AI may set")},
 	{Key: "flow_factor_max_percent", Label: "Flow factor max (%)", Kind: rowFloat,
-		Help: "Highest flow factor a mid-print change may set."},
+		Help: bandHelp("flow: highest flow factor the AI may set")},
+}
+
+// bandHelp prefixes a band's own rule with what every band shares: it only
+// limits the AI, only during a print, and never the file's own settings.
+func bandHelp(rule string) string {
+	return "AI limit during a print only; your gcode is never limited. " +
+		strings.ToUpper(rule[:1]) + rule[1:] + "."
 }
 
 // presetChoices is the cycle order for the tool preset row.
@@ -187,7 +193,7 @@ func setSettingsValue(cfg domain.Settings, key, raw string) (domain.Settings, er
 
 // SettingsStepOptions controls the Settings step.
 type SettingsStepOptions struct {
-	// DryRun computes what "s" would save and shows it instead of writing
+	// DryRun computes what enter would save and shows it instead of writing
 	// config.toml, matching installer.ApplyStepOptions.DryRun.
 	DryRun bool
 }
@@ -195,9 +201,9 @@ type SettingsStepOptions struct {
 // SettingsStep returns a flow.Step that lets the user choose the tool
 // preset (dev_docs/safety-architecture.md D6), the mid-print setpoint bands
 // (D1) and the idle heat timeout (D2), and saves them to the settings file
-// on "s". Defaults come from domain.DefaultSettings (through
+// on enter. Defaults come from domain.DefaultSettings (through
 // domain.ReadSettings, which never writes; the file is created only by an
-// explicit "s", or left untouched entirely in dry-run).
+// explicit enter, or left untouched entirely in dry-run).
 func SettingsStep[T any](stateFn func(*T) *SettingsState, opts SettingsStepOptions) flow.Step[T] {
 	return &settingsStep[T]{stateFn: stateFn, opts: opts}
 }
@@ -221,27 +227,53 @@ func (s *settingsStep[T]) Hints(state *T) []struct{ Key, Label string } {
 	if st.Saving {
 		return nil // the save is in flight and cannot be cancelled
 	}
+	hints := settingsHints(st)
+	out := make([]struct{ Key, Label string }, len(hints))
+	for i, h := range hints {
+		out[i] = struct{ Key, Label string }(h)
+	}
+	return out
+}
+
+// settingsHints is the one key list both Hints and the View footer show, so
+// they cannot drift apart. Enter saves and continues, like every other
+// wizard step; the highlighted row is changed in place.
+func settingsHints(st *SettingsState) []tui.Hint {
 	if st.Editing {
-		if settingsRows[st.Cursor].Kind == rowChoice {
-			return []struct{ Key, Label string }{
-				{Key: "←→", Label: "change"},
-				{Key: "enter", Label: "confirm"},
-				{Key: "esc", Label: "cancel"},
-			}
-		}
-		return []struct{ Key, Label string }{
+		return []tui.Hint{
 			{Key: "enter", Label: "confirm"},
 			{Key: "esc", Label: "cancel"},
 		}
 	}
-	return []struct{ Key, Label string }{
+	change := tui.Hint{Key: "e", Label: "edit"}
+	if settingsRows[st.Cursor].Kind == rowChoice {
+		change = tui.Hint{Key: "←→", Label: "change"}
+	}
+	return []tui.Hint{
 		{Key: "↑↓", Label: "move"},
-		{Key: "enter", Label: "edit"},
+		change,
 		{Key: "r", Label: "restore defaults"},
-		{Key: "s", Label: "save & continue"},
+		{Key: "enter", Label: "save & continue"},
 		{Key: "esc", Label: "back"},
 		{Key: "q", Label: "cancel"},
 	}
+}
+
+// cyclePreset moves the tool preset dir steps through presetChoices,
+// wrapping at either end.
+func cyclePreset(p domain.ToolPreset, dir int) domain.ToolPreset {
+	n := len(presetChoices)
+	return presetChoices[(presetIndex(p)+dir+n)%n]
+}
+
+// isNumberKey reports whether a key press can start a number: typing on a
+// numeric row starts editing it with that character.
+func isNumberKey(m tea.KeyMsg) bool {
+	if m.Type != tea.KeyRunes || len(m.Runes) != 1 {
+		return false
+	}
+	r := m.Runes[0]
+	return (r >= '0' && r <= '9') || r == '.'
 }
 
 func (s *settingsStep[T]) get(state *T) *SettingsState {
@@ -267,7 +299,7 @@ type settingsSavedMsg struct {
 // Init loads the settings the step edits with domain.ReadSettings, which
 // never writes, in every mode: opening the Settings step, dry-run or not,
 // must never create config.toml on its own. The file is created only by an
-// explicit "s" (and never in dry-run; see saveCmd).
+// explicit enter (and never in dry-run; see saveCmd).
 func (s *settingsStep[T]) Init(state *T) tea.Cmd {
 	st := s.get(state)
 	if st == nil {
@@ -341,13 +373,30 @@ func (s *settingsStep[T]) updateList(m tea.KeyMsg, st *SettingsState) (flow.Dire
 		st.Cursor = (st.Cursor + 1) % len(settingsRows)
 	case "r":
 		st.Settings = domain.DefaultSettings()
-		st.Message = "Recommended defaults restored; press s to save."
+		st.Message = "Recommended defaults restored; press enter to save."
 	case "enter":
-		s.startEdit(st)
-	case "s":
 		st.Saving = true
 		st.Message = ""
 		return flow.Continue, s.saveCmd(st)
+	default:
+		row := settingsRows[st.Cursor]
+		if row.Kind == rowChoice {
+			// The preset is drawn as a value to flip through, so it changes
+			// in place with no separate edit mode.
+			switch m.String() {
+			case "left", "h":
+				st.Settings.Tools.Preset = cyclePreset(st.Settings.Tools.Preset, -1)
+			case "right", "l", " ":
+				st.Settings.Tools.Preset = cyclePreset(st.Settings.Tools.Preset, 1)
+			}
+			return flow.Continue, nil
+		}
+		switch {
+		case m.String() == "e":
+			s.startEdit(st, settingsValue(st.Settings, row.Key))
+		case isNumberKey(m):
+			s.startEdit(st, string(m.Runes))
+		}
 	}
 	return flow.Continue, nil
 }
@@ -368,7 +417,7 @@ func (s *settingsStep[T]) handleSaved(st *SettingsState, m settingsSavedMsg) (fl
 	return flow.Next, nil
 }
 
-// saveCmd runs the "s" save off Update: in dry-run it only validates the
+// saveCmd runs the enter save off Update: in dry-run it only validates the
 // settings and never calls domain.SaveSettings, so config.toml is never
 // created just by walking through the wizard with --dry-run; otherwise it
 // saves exactly as Update used to.
@@ -390,44 +439,16 @@ func (s *settingsStep[T]) saveCmd(st *SettingsState) tea.Cmd {
 	}
 }
 
-func (s *settingsStep[T]) startEdit(st *SettingsState) {
-	row := settingsRows[st.Cursor]
+// startEdit opens the numeric editor on the highlighted row with input as
+// its starting text: the current value for "e", or the typed character.
+func (s *settingsStep[T]) startEdit(st *SettingsState, input string) {
 	st.Editing = true
-	st.Message = row.Help
-	if row.Kind == rowChoice {
-		st.ChoiceCursor = presetIndex(st.Settings.Tools.Preset)
-		return
-	}
-	st.Input = settingsValue(st.Settings, row.Key)
+	st.Message = ""
+	st.Input = input
 }
 
 func (s *settingsStep[T]) updateEditing(m tea.KeyMsg, st *SettingsState) (flow.Directive, tea.Cmd) {
 	row := settingsRows[st.Cursor]
-
-	if row.Kind == rowChoice {
-		// The value is drawn as "< camera >", so left/right are the keys a
-		// user reaches for first; up/down keep working too.
-		switch m.String() {
-		case "left", "h", "up", "k":
-			st.ChoiceCursor = (st.ChoiceCursor - 1 + len(presetChoices)) % len(presetChoices)
-		case "right", "l", "down", "j", " ":
-			st.ChoiceCursor = (st.ChoiceCursor + 1) % len(presetChoices)
-		case "enter":
-			cfg := st.Settings
-			cfg.Tools.Preset = presetChoices[st.ChoiceCursor]
-			if err := domain.ValidateSettings(cfg); err != nil {
-				st.Message = err.Error()
-				return flow.Continue, nil
-			}
-			st.Settings = cfg
-			st.Editing = false
-			st.Message = ""
-		case "esc":
-			st.Editing = false
-			st.Message = ""
-		}
-		return flow.Continue, nil
-	}
 
 	switch m.String() {
 	case "enter":
@@ -486,41 +507,26 @@ func (s *settingsStep[T]) View(state *T) string {
 			cursor = styles.Cursor.Render(">")
 		}
 		value := settingsValue(st.Settings, row.Key)
-		if st.Editing && i == st.Cursor {
-			if row.Kind == rowChoice {
-				value = "< " + string(presetChoices[st.ChoiceCursor]) + " >"
-			} else {
-				value = st.Input + "_"
-			}
+		switch {
+		case st.Editing && i == st.Cursor:
+			value = st.Input + "_"
+		case row.Kind == rowChoice:
+			value = "< " + value + " >"
 		}
 		fmt.Fprintf(&b, " %s %-34s %s\n", cursor, row.Label, value)
 	}
 
-	if st.Message != "" {
-		b.WriteString("\n  " + st.Message)
+	// A status message (an error, a restore) wins; otherwise explain the
+	// highlighted row, so what each band means is always on screen.
+	message := st.Message
+	if message == "" {
+		message = settingsRows[st.Cursor].Help
 	}
+	b.WriteString("\n  " + message)
 
-	footer := tui.Hints(tui.DefaultTheme,
-		tui.Hint{Key: "↑↓", Label: "move"},
-		tui.Hint{Key: "enter", Label: "edit"},
-		tui.Hint{Key: "r", Label: "restore defaults"},
-		tui.Hint{Key: "s", Label: "save & continue"},
-		tui.Hint{Key: "esc", Label: "back"},
-		tui.Hint{Key: "q", Label: "cancel"},
-	)
-	if st.Editing {
-		if settingsRows[st.Cursor].Kind == rowChoice {
-			footer = tui.Hints(tui.DefaultTheme,
-				tui.Hint{Key: "←→", Label: "change"},
-				tui.Hint{Key: "enter", Label: "confirm"},
-				tui.Hint{Key: "esc", Label: "cancel"},
-			)
-		} else {
-			footer = tui.Hints(tui.DefaultTheme,
-				tui.Hint{Key: "enter", Label: "confirm"},
-				tui.Hint{Key: "esc", Label: "cancel"},
-			)
-		}
+	var footer string
+	if !st.Saving {
+		footer = tui.Hints(tui.DefaultTheme, settingsHints(st)...)
 	}
 	b.WriteString("\n" + tui.Footer(tui.DefaultTheme, footer))
 	return tui.Section(tui.DefaultTheme, s.Title(state), b.String())
