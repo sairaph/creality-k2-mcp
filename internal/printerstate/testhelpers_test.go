@@ -17,25 +17,25 @@ import (
 // package's tests is deterministic.
 var fixedNow = time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 
-// readRepoFile reads a file relative to the repository root (two levels up
-// from this package directory), for the real captures the task requires
-// table tests to cover directly rather than copied fixtures.
-func readRepoFile(t *testing.T, relPath string) []byte {
+// readTestdata reads a file from this package's testdata directory. The real
+// printer captures live there verbatim (unaltered copies of the live reads),
+// so the tests run anywhere the repository is checked out.
+func readTestdata(t *testing.T, name string) []byte {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", relPath))
+	data, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
-		t.Fatalf("read %s: %v", relPath, err)
+		t.Fatalf("read testdata/%s: %v", name, err)
 	}
 	return data
 }
 
 // idleObjectsRaw decodes the real idle-baseline capture
-// (references/printer-snapshot/printer_objects_query_all.json) into the same
+// (testdata/printer_objects_query_all.json) into the same
 // map[string]json.RawMessage shape QueryObjects returns, so it can be run
 // through Snapshot.decodeObjects exactly as a live call would.
 func idleObjectsRaw(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
-	data := readRepoFile(t, "references/printer-snapshot/printer_objects_query_all.json")
+	data := readTestdata(t, "printer_objects_query_all.json")
 	var envelope struct {
 		Result struct {
 			Status map[string]json.RawMessage `json:"status"`
