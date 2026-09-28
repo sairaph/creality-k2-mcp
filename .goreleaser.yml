@@ -1,0 +1,32 @@
+version: 2
+
+project_name: creality_k2_mcp
+
+builds:
+  - id: creality_k2_mcp
+    main: .
+    binary: creality_k2_mcp
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [binary]
+    name_template: '{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}'
+
+checksum:
+  name_template: SHA256SUMS.txt
+
+release:
+  # Tags like v0.1.1-rc.1 publish as pre-releases, which /releases/latest
+  # (the install scripts and `update`) never picks (matches freecad-mcp's
+  # own .goreleaser.yml).
+  prerelease: auto
+  extra_files:
+    - glob: ./install.sh
+    - glob: ./install.ps1
+
+changelog:
+  disable: true

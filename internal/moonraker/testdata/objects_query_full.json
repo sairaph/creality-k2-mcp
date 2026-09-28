@@ -1,0 +1,470 @@
+{
+  "result": {
+    "eventtime": 267820.752473248,
+    "status": {
+      "box": {
+        "filament": 1,
+        "state": "disconnect",
+        "auto_refill": 1,
+        "enable": 1,
+        "filament_useup": 1,
+        "same_material": [],
+        "map": {
+          "T1A": "T1A",
+          "T1B": "T1B",
+          "T1C": "T1C",
+          "T1D": "T1D",
+          "T2A": "T2A",
+          "T2B": "T2B",
+          "T2C": "T2C",
+          "T2D": "T2D",
+          "T3A": "T3A",
+          "T3B": "T3B",
+          "T3C": "T3C",
+          "T3D": "T3D",
+          "T4A": "T4A",
+          "T4B": "T4B",
+          "T4C": "T4C",
+          "T4D": "T4D"
+        },
+        "T1": {
+          "state": "None",
+          "filament": "None",
+          "temperature": "None",
+          "dry_and_humidity": "None",
+          "filament_detected": "None",
+          "measuring_wheel": "None",
+          "version": "-1",
+          "sn": "-1",
+          "mode": "-1",
+          "vender": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "remain_len": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "color_value": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "material_type": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "uuid": "None",
+          "change_color_num": [
+            -1,
+            -1,
+            -1,
+            -1
+          ],
+          "type": "None",
+          "slot_rfid_scrap": "None"
+        },
+        "T2": {
+          "state": "None",
+          "filament": "None",
+          "temperature": "None",
+          "dry_and_humidity": "None",
+          "filament_detected": "None",
+          "measuring_wheel": "None",
+          "version": "-1",
+          "sn": "-1",
+          "mode": "-1",
+          "vender": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "remain_len": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "color_value": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "material_type": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "uuid": "None",
+          "change_color_num": [
+            -1,
+            -1,
+            -1,
+            -1
+          ],
+          "type": "None",
+          "slot_rfid_scrap": "None"
+        },
+        "T3": {
+          "state": "None",
+          "filament": "None",
+          "temperature": "None",
+          "dry_and_humidity": "None",
+          "filament_detected": "None",
+          "measuring_wheel": "None",
+          "version": "-1",
+          "sn": "-1",
+          "mode": "-1",
+          "vender": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "remain_len": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "color_value": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "material_type": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "uuid": "None",
+          "change_color_num": [
+            -1,
+            -1,
+            -1,
+            -1
+          ],
+          "type": "None",
+          "slot_rfid_scrap": "None"
+        },
+        "T4": {
+          "state": "None",
+          "filament": "None",
+          "temperature": "None",
+          "dry_and_humidity": "None",
+          "filament_detected": "None",
+          "measuring_wheel": "None",
+          "version": "-1",
+          "sn": "-1",
+          "mode": "-1",
+          "vender": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "remain_len": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "color_value": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "material_type": [
+            "-1",
+            "-1",
+            "-1",
+            "-1"
+          ],
+          "uuid": "None",
+          "change_color_num": [
+            -1,
+            -1,
+            -1,
+            -1
+          ],
+          "type": "None",
+          "slot_rfid_scrap": "None"
+        }
+      },
+      "custom_macro": {
+        "leveling_calibration": 0,
+        "default_extruder_temp": 220.0,
+        "default_bed_temp": 50.0,
+        "g28_ext_temp": 140.0,
+        "qmode_flag": 0
+      },
+      "display_status": {
+        "progress": 0.0,
+        "message": null
+      },
+      "exclude_object": {
+        "objects": [],
+        "excluded_objects": [],
+        "current_object": null
+      },
+      "extruder": {
+        "temperature": 29.34,
+        "target": 0.0,
+        "power": 0.0,
+        "can_extrude": false,
+        "extrude_below_min_temp_err_is_report": false,
+        "nozzle_diameter": 0.4,
+        "pressure_advance": 0.04,
+        "smooth_time": 0.04
+      },
+      "filament_rack": {
+        "vender": "-1",
+        "color_value": "0ffffff",
+        "material_type": "001001",
+        "remain_material_color": "0ffffff",
+        "remain_material_type": "001001",
+        "remain_material_velocity": 575.0
+      },
+      "gcode_macro PRINTER_PARAM": {
+        "z_safe_pause": 49.420946727423406,
+        "z_safe_g28": 3.0,
+        "max_x_position": 260.0,
+        "max_y_position": 262.0,
+        "max_z_position": 260.0,
+        "fans": 3,
+        "auto_g29": 0,
+        "fan0_min": 25,
+        "fan1_min": 50,
+        "fan2_min": 100,
+        "fan2_speed": 0.8784313725490196,
+        "fan0_speed": 1.0,
+        "hotend_temp": 0,
+        "e_min_current": 0.27,
+        "bed_steady_temp": [
+          50,
+          70,
+          80,
+          100
+        ],
+        "bed_steady_time": [
+          360,
+          360,
+          480,
+          480
+        ]
+      },
+      "gcode_macro product_param": {
+        "bed_size_x": 260,
+        "bed_size_y": 260,
+        "bed_size_z": 260,
+        "nozzle_temp": 300,
+        "bed_temp": 100,
+        "chamber_temp": 60
+      },
+      "gcode_move": {
+        "speed_factor": 1.0,
+        "speed": 600.0,
+        "extrude_factor": 1.0,
+        "absolute_coordinates": true,
+        "absolute_extrude": false,
+        "homing_origin": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position": [
+          205.0,
+          261.0,
+          128.09749555555555,
+          37952.518389994366
+        ],
+        "gcode_position": [
+          205.0,
+          261.0,
+          128.09749555555555,
+          -3.0
+        ]
+      },
+      "heater_bed": {
+        "temperature": 25.81,
+        "target": 0.0,
+        "power": 0.0
+      },
+      "idle_timeout": {
+        "state": "Ready",
+        "printing_time": 0.0
+      },
+      "motor_control": {
+        "motor_ready": true,
+        "is_homing": false,
+        "cut": {
+          "state": true,
+          "pos_x": -7.9
+        },
+        "dev_uuid": {
+          "x": [
+            205,
+            171,
+            100,
+            94,
+            27,
+            188,
+            76,
+            198
+          ],
+          "y": [
+            205,
+            171,
+            221,
+            138,
+            28,
+            188,
+            198,
+            242
+          ],
+          "z": [],
+          "z1": [],
+          "e": []
+        }
+      },
+      "output_pin LED": {
+        "value": 0.0
+      },
+      "output_pin fan0": {
+        "value": 0.0
+      },
+      "output_pin fan1": {
+        "value": 0.0
+      },
+      "output_pin fan2": {
+        "value": 0.0
+      },
+      "pause_resume": {
+        "is_paused": false,
+        "resume_err": false
+      },
+      "print_stats": {
+        "filename": "",
+        "total_duration": 0.0,
+        "print_duration": 0.0,
+        "filament_used": 0.0,
+        "state": "standby",
+        "message": "",
+        "info": {
+          "total_layer": null,
+          "current_layer": null
+        },
+        "power_loss": 0,
+        "z_pos": 127.99749555555556
+      },
+      "toolhead": {
+        "homed_axes": "",
+        "axis_minimum": [
+          -6.5,
+          -3.0,
+          -10.0,
+          0.0
+        ],
+        "axis_maximum": [
+          262.0,
+          262.0,
+          270.0,
+          0.0
+        ],
+        "print_time": 258867.20099835002,
+        "stalls": 3,
+        "estimated_print_time": 267255.95168225834,
+        "extruder": "extruder",
+        "position": [
+          205.0,
+          261.0,
+          127.99749555555556,
+          37952.518389994366
+        ],
+        "max_velocity": 800.0,
+        "max_accel": 5000.0,
+        "max_accel_to_decel": 5000.0,
+        "square_corner_velocity": 8.0,
+        "G29_flag": false
+      },
+      "virtual_sdcard": {
+        "file_path": null,
+        "progress": 0.0,
+        "is_active": false,
+        "file_position": 0.0,
+        "file_size": 0.0,
+        "first_layer_stop": false,
+        "layer": 0,
+        "layer_count": 0,
+        "run_dis": -250.0,
+        "bed_mesh_calibate_state": false,
+        "klipper_capture": false,
+        "klipper_capture_cnt": 0,
+        "cur_print_data": {
+          "end_time": 1790542256.4752624,
+          "filament_used": 3435.035980004199,
+          "filename": "FigureJoints5mmball.stl_PLA_41m51s.gcode",
+          "metadata": {
+            "size": 4937378,
+            "modified": 1790539373.9107847,
+            "uuid": "e7341f09-7d2c-4fa3-934c-3441a101b01f",
+            "slicer": "Creality",
+            "slicer_version": "7.2.2.5483",
+            "gcode_start_byte": 44980,
+            "gcode_end_byte": 4906119,
+            "layer_count": 149,
+            "object_height": 30.1,
+            "estimated_time": 2511,
+            "layer_height": 0.2,
+            "first_layer_height": 0.2,
+            "filament_type": "PLA",
+            "flush_para": {
+              "flush_multiplier": 1.0,
+              "flush_volumes_matrix": [
+                0
+              ]
+            },
+            "model_info": {
+              "MINX": 75.83,
+              "MINY": 98.93,
+              "MINZ": 0.0,
+              "MAXX": 165.97,
+              "MAXY": 161.07,
+              "MAXZ": 29.52,
+              "multicolor_method": 0,
+              "MaterialType": "PLA"
+            },
+            "default_filament_colour": [
+              "#FFFFFF"
+            ],
+            "filament_used_g": [
+              "10.42"
+            ]
+          },
+          "print_duration": 2484.632461142988,
+          "start_time": 1790539653.1688812,
+          "status": "completed",
+          "total_duration": 2516.9544621999958
+        }
+      },
+      "webhooks": {
+        "state": "ready",
+        "state_message": "Printer is ready"
+      }
+    }
+  }
+}

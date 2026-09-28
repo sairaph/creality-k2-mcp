@@ -1,0 +1,77 @@
+# Forbidden command inventory for internal/policy's regression test
+# (dev_docs/safety-architecture.md section 3.2 point 2).
+#
+# Generated from references/analysis/08-klipper-persistence-guards.md
+# section 5 (the classification table's "Never"/"Never expose"/"Never
+# standalone"/"Never call directly" rows) and
+# references/analysis/10-hazard-analysis.md section 4 (the persistent-change
+# inventory's "must be unreachable: yes" rows), matching
+# dev_docs/safety-architecture.md section 3.2 point 2's own merged list
+# verbatim, plus concrete names observed in
+# references/printer-snapshot/config/gcode_macro.cfg for the wildcard
+# groups that document names as a family (EEPROM_*, MOTOR_*, BOX_*,
+# CR_BOX_*, ZDOWN*, BED_MESH_CALIBRATE*, BED_MANUAL_CAL*).
+#
+# One command name per line. A line ending in "*" is a prefix rule: any
+# rendered command whose first word starts with that prefix is forbidden.
+# Blank lines and lines starting with # are ignored.
+
+SAVE_CONFIG
+CXSAVE_CONFIG
+SAVE_VARIABLE
+SET_IDLE_TIMEOUT
+SET_GCODE_OFFSET
+SET_VELOCITY_LIMIT
+SET_PRESSURE_ADVANCE
+Qmode
+Qmode_exit
+SET_QMODE_FLAG
+SET_KINEMATIC_POSITION
+FORCE_MOVE
+Z_OFFSET_APPLY_PROBE
+PROBE_CALIBRATE
+PID_CALIBRATE
+NOZZLE_PID
+NOZZLE_PID_HIGH
+BEDPID
+INPUTSHAPER
+BELT_MDL_CALI
+BELT_TENSION
+GET_MAX_Z
+Z_FAIL_PROTECT_HOTBED
+TEST_HOME
+A_G28_TEST
+A_G28_test
+A_TriPress_STEP1
+A_TriPress_STEP2
+EXTRUDE_TEST
+LOAD_AI_T_CMD_TEST
+LOAD_AI_DEAL
+CALIBRATE_CUT_POS
+M8200
+FIRMWARE_RESTART
+RESTART
+M112
+G28
+G0
+G1
+M84
+TURN_OFF_HEATERS
+G29
+CX_PRINT_LEVELING_CALIBRATION
+PRINT_CALIBRATION
+REMOVE_CONFIG_SECTION
+SHAPER_CALIBRATE
+SET_INPUT_SHAPER
+
+# Wildcard families (dev_docs/safety-architecture.md section 3.2 point 2:
+# "EEPROM_*, MOTOR_*, BOX_*, CR_BOX_*"), plus the ZDOWN and
+# BED_MESH_CALIBRATE/BED_MANUAL_CAL families named as "and variants" /
+# observed as a family in gcode_macro.cfg.
+EEPROM_*
+MOTOR_*
+BOX_*
+CR_BOX_*
+ZDOWN*
+BED_MESH_CALIBRATE*
+BED_MANUAL_CAL*
