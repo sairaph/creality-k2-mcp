@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -86,6 +87,29 @@ func TestSettingsScreenRejectsInvalidEdit(t *testing.T) {
 	}
 	if s.message == "" {
 		t.Error("expected an inline error message for the invalid value")
+	}
+}
+
+// The preset is drawn as "< camera >", so left/right must change it and the
+// footer must say so.
+func TestSettingsScreenPresetChangesWithLeftRight(t *testing.T) {
+	isolateHome(t)
+	s := initSettingsScreen(t)
+	s.Update(keyType(tea.KeyEnter)) // cursor starts on preset
+	if !strings.Contains(s.View(), "←→ change") {
+		t.Error("editing the preset should show a ←→ change hint")
+	}
+	s.Update(keyType(tea.KeyRight))
+	s.Update(keyType(tea.KeyEnter))
+	if s.settings.Tools.Preset != domain.PresetControl {
+		t.Fatalf("preset = %q after right from camera, want %q", s.settings.Tools.Preset, domain.PresetControl)
+	}
+	s.Update(keyType(tea.KeyEnter))
+	s.Update(keyType(tea.KeyLeft))
+	s.Update(keyType(tea.KeyLeft))
+	s.Update(keyType(tea.KeyEnter))
+	if s.settings.Tools.Preset != domain.PresetMonitor {
+		t.Errorf("preset = %q after two lefts from control, want %q", s.settings.Tools.Preset, domain.PresetMonitor)
 	}
 }
 

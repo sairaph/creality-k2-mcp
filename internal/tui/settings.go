@@ -278,10 +278,12 @@ func (s *settingsScreen) updateEditing(m tea.KeyMsg) tea.Cmd {
 	row := settingsScreenRows[s.cursor]
 
 	if row.kind == settingsRowChoice {
+		// The value is drawn as "< camera >", so left/right are the keys a
+		// user reaches for first; up/down keep working too.
 		switch m.String() {
-		case "up", "k":
+		case "left", "h", "up", "k":
 			s.choiceCursor = (s.choiceCursor - 1 + len(settingsPresetChoices)) % len(settingsPresetChoices)
-		case "down", "j":
+		case "right", "l", "down", "j", " ":
 			s.choiceCursor = (s.choiceCursor + 1) % len(settingsPresetChoices)
 		case "enter":
 			cfg := s.settings
@@ -374,6 +376,9 @@ func (s *settingsScreen) View() string {
 	footer := "  ↑↓ move · enter edit · r restore defaults · s save · esc back"
 	if s.editing {
 		footer = "  enter confirm · esc cancel"
+		if settingsScreenRows[s.cursor].kind == settingsRowChoice {
+			footer = "  ←→ change · enter confirm · esc cancel"
+		}
 	}
 	b.WriteString("\n\n" + tuiStyleDim.Render(footer))
 	return b.String()

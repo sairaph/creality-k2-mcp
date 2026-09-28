@@ -156,6 +156,43 @@ func TestSettingsStepPresetCyclesAndValidates(t *testing.T) {
 	}
 }
 
+// The preset is drawn as "< camera >", so left/right must change it and the
+// footer must say so (a real user could not find the up/down keys).
+func TestSettingsStepPresetChangesWithLeftRight(t *testing.T) {
+	s := newSettingsStep()
+	st := &settingsTestState{}
+	st.Settings.Ready = true
+	st.Settings.Settings = domain.DefaultSettings() // camera
+	st.Settings.Cursor = 0                          // preset row
+
+	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st) // start editing
+	if !strings.Contains(s.View(st), "←→") {
+		t.Error("editing the preset should show a ←→ change hint")
+	}
+	var hinted bool
+	for _, h := range s.Hints(st) {
+		if h.Key == "←→" {
+			hinted = true
+		}
+	}
+	if !hinted {
+		t.Error("Hints() should include ←→ while editing the preset")
+	}
+
+	s.Update(tea.KeyMsg{Type: tea.KeyRight}, st)
+	if got := presetChoices[st.Settings.ChoiceCursor]; got != domain.PresetControl {
+		t.Fatalf("after right: %q, want %q", got, domain.PresetControl)
+	}
+	s.Update(tea.KeyMsg{Type: tea.KeyRight}, st) // wraps to monitor
+	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, st)  // back to control
+	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, st)  // camera
+	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, st)  // monitor
+	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st) // confirm
+	if st.Settings.Settings.Tools.Preset != domain.PresetMonitor {
+		t.Errorf("preset = %q, want %q", st.Settings.Settings.Tools.Preset, domain.PresetMonitor)
+	}
+}
+
 func TestSettingsStepRestoreDefaults(t *testing.T) {
 	s := newSettingsStep()
 	st := &settingsTestState{}

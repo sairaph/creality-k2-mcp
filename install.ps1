@@ -51,6 +51,9 @@ $checksumUrl = $url.Substring(0, $url.LastIndexOf('/')) + '/SHA256SUMS.txt'
 $verified = $false
 try {
     $checksums = (Invoke-WebRequest -Uri $checksumUrl -UseBasicParsing).Content
+    # GitHub serves release assets as application/octet-stream, which
+    # Windows PowerShell 5.1 returns as byte[] rather than a string.
+    if ($checksums -is [byte[]]) { $checksums = [Text.Encoding]::UTF8.GetString($checksums) }
     $pattern = ' \*?' + [regex]::Escape($asset) + '\s*$'
     $line = $checksums -split "`n" | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ -match $pattern } | Select-Object -First 1
     if ($line) {

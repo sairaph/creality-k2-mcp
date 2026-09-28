@@ -222,6 +222,13 @@ func (s *settingsStep[T]) Hints(state *T) []struct{ Key, Label string } {
 		return nil // the save is in flight and cannot be cancelled
 	}
 	if st.Editing {
+		if settingsRows[st.Cursor].Kind == rowChoice {
+			return []struct{ Key, Label string }{
+				{Key: "←→", Label: "change"},
+				{Key: "enter", Label: "confirm"},
+				{Key: "esc", Label: "cancel"},
+			}
+		}
 		return []struct{ Key, Label string }{
 			{Key: "enter", Label: "confirm"},
 			{Key: "esc", Label: "cancel"},
@@ -398,10 +405,12 @@ func (s *settingsStep[T]) updateEditing(m tea.KeyMsg, st *SettingsState) (flow.D
 	row := settingsRows[st.Cursor]
 
 	if row.Kind == rowChoice {
+		// The value is drawn as "< camera >", so left/right are the keys a
+		// user reaches for first; up/down keep working too.
 		switch m.String() {
-		case "up", "k":
+		case "left", "h", "up", "k":
 			st.ChoiceCursor = (st.ChoiceCursor - 1 + len(presetChoices)) % len(presetChoices)
-		case "down", "j":
+		case "right", "l", "down", "j", " ":
 			st.ChoiceCursor = (st.ChoiceCursor + 1) % len(presetChoices)
 		case "enter":
 			cfg := st.Settings
@@ -500,10 +509,18 @@ func (s *settingsStep[T]) View(state *T) string {
 		tui.Hint{Key: "q", Label: "cancel"},
 	)
 	if st.Editing {
-		footer = tui.Hints(tui.DefaultTheme,
-			tui.Hint{Key: "enter", Label: "confirm"},
-			tui.Hint{Key: "esc", Label: "cancel"},
-		)
+		if settingsRows[st.Cursor].Kind == rowChoice {
+			footer = tui.Hints(tui.DefaultTheme,
+				tui.Hint{Key: "←→", Label: "change"},
+				tui.Hint{Key: "enter", Label: "confirm"},
+				tui.Hint{Key: "esc", Label: "cancel"},
+			)
+		} else {
+			footer = tui.Hints(tui.DefaultTheme,
+				tui.Hint{Key: "enter", Label: "confirm"},
+				tui.Hint{Key: "esc", Label: "cancel"},
+			)
+		}
 	}
 	b.WriteString("\n" + tui.Footer(tui.DefaultTheme, footer))
 	return tui.Section(tui.DefaultTheme, s.Title(state), b.String())
