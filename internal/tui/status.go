@@ -11,9 +11,9 @@ import (
 	"github.com/sairaph/mcp-wizard/app/detail"
 	"github.com/sairaph/mcp-wizard/app/list"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // statusRefreshInterval is how often the live view reloads

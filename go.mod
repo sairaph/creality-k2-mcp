@@ -1,4 +1,4 @@
-module github.com/sairaph/creality_k2_mcp
+module github.com/sairaph/creality-k2-mcp
 
 go 1.27.1
 

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // Policy is the stateful half of this package: the per-printer lock
@@ -94,6 +94,12 @@ func (p *Policy) Execute(ctx context.Context, deps Deps, printer domain.Printer,
 		return Result{}, idErr
 	}
 
+	// set_filament_definition has its own flow (execute_filament.go): the slow
+	// catalog read happens before the lock, so it acquires the lock itself.
+	if name == ActionSetFilamentDefinition {
+		return p.executeSetFilament(ctx, deps, printer, spec, params, identity)
+	}
+
 	locks, lockErr := acquireLocks(ctx, p.locks, identity)
 	if lockErr != nil {
 		lockErr.Action = name
@@ -112,7 +118,10 @@ func (p *Policy) Execute(ctx context.Context, deps Deps, printer domain.Printer,
 	// step before sending" snapshot (P5): nothing slow happens between this
 	// read and the send call below.
 	snap := printerstate.Take(ctx, deps.stateDeps(), printer)
-	derived := printerstate.DeriveActivityState(snap, nil)
+	// A pause this server sent that has now settled gets its resume record before
+	// anything derives from it (final review M1).
+	finalizePause(ctx, deps, locks.pl, snap)
+	derived := deriveFor(locks.pl, snap, nil)
 
 	if !skipGate(name) {
 		if err := checkGate(spec, derived); err != nil {
@@ -126,27 +135,49 @@ func (p *Policy) Execute(ctx context.Context, deps Deps, printer domain.Printer,
 		err.Action = name
 		return Result{}, err
 	}
+	bind, berr := computeBinding(ctx, deps, locks.pl, spec, snap, derived, params)
+	if berr != nil {
+		berr.Action = name
+		return Result{}, berr
+	}
 
 	if confirmation == ConfirmationProposalToken {
 		job := printerstate.JobIdentityFrom(snap)
+		extra := ""
+		effects, commands := spec.Effects, spec.Commands
+		var mapping []MappedFilament
+		if name == ActionCancelPrint && inStartWindow(snap, derived) {
+			// The confirm will send the 9999 stop, not Moonraker's cancel: the proposal
+			// must describe that, not END_PRINT (final review M4).
+			effects, commands = startWindowStopEffects, startWindowStopCommands
+		}
+		if bind != nil {
+			extra = bind.extra
+			mapping = bind.mapping
+			if name == ActionStartPrint {
+				effects = bind.notes
+				commands = startCommands(bind)
+			}
+		}
 		tok := p.tokens.issue(proposal{
 			identity: identity, action: spec.Name, params: params, job: job,
-			bucket: derived.Bucket, class: derived.Class, snapshotTime: snap.Taken, issuedAt: now,
+			bucket: derived.Bucket, class: derived.Class, snapshotTime: snap.Taken, issuedAt: now, extra: extra,
 		})
 		return Result{
 			Action:    spec.Name,
 			Proposed:  true,
 			Token:     tok,
 			ExpiresAt: now.Add(tokenTTL),
-			Effects:   spec.Effects,
-			Commands:  spec.Commands,
+			Effects:   withCFSNote(effects, spec.Name, derived),
+			Commands:  commands,
 			Before:    printerstate.BuildStateBlock(snap, derived, nil),
 			Printer:   printer,
 			Job:       job,
+			Mapping:   mapping,
 		}, nil
 	}
 
-	return p.send(ctx, deps, printer, identity, settings, spec, params, snap, derived, locks)
+	return p.send(ctx, deps, printer, identity, settings, spec, params, snap, derived, locks, bind)
 }
 
 // resolveExecuteIdentity resolves the lock identity Execute takes its
@@ -241,7 +272,10 @@ func (p *Policy) executeWithToken(ctx context.Context, deps Deps, printer domain
 	// Fresh snapshot, the last thing done before sending (P5) - never the
 	// snapshot the proposal was built from.
 	snap := printerstate.Take(ctx, deps.stateDeps(), printer)
-	derived := printerstate.DeriveActivityState(snap, nil)
+	// A pause this server sent that has now settled gets its resume record before
+	// anything derives from it (final review M1).
+	finalizePause(ctx, deps, locks.pl, snap)
+	derived := deriveFor(locks.pl, snap, nil)
 	job := printerstate.JobIdentityFrom(snap)
 
 	if changed := proposalDiff(prop, identity, params, job, derived.Bucket, derived.Class); len(changed) > 0 {
@@ -263,8 +297,28 @@ func (p *Policy) executeWithToken(ctx context.Context, deps Deps, printer domain
 		err.Action = spec.Name
 		return Result{}, err
 	}
+	bind, berr := computeBinding(ctx, deps, locks.pl, spec, snap, derived, params)
+	if berr != nil {
+		berr.Action = spec.Name
+		return Result{}, berr
+	}
+	// What the token bound beyond Params (mapping, file identity, every slot
+	// definition, the pause record) is recomputed from fresh reads and must
+	// be identical (plan 8a.3).
+	wantExtra := ""
+	if bind != nil {
+		wantExtra = bind.extra
+	}
+	if wantExtra != prop.extra {
+		return Result{}, &Error{
+			Action:  spec.Name,
+			Code:    CodeConflict,
+			Message: "the filament mapping, the file or a slot definition changed since this proposal was issued; request a new proposal",
+			Changed: []string{"cfs_binding"},
+		}
+	}
 
-	return p.send(ctx, deps, printer, identity, settings, spec, params, snap, derived, locks)
+	return p.send(ctx, deps, printer, identity, settings, spec, params, snap, derived, locks, bind)
 }
 
 // checkGate applies the generic bucket/CFS gate, except for set_light,
@@ -280,6 +334,15 @@ func checkGate(spec actionSpec, derived printerstate.Derived) *Error {
 			Code:    CodeUnavailable,
 			Message: strings.Join(nonEmpty(derived.Reasons), "; "),
 		}
+	}
+	// Cancel during the print-start self-test is refused until the 9999 stop is
+	// verified (plan 8a.1). It is a gate rule, not only a parameter check, so the
+	// actions list and Execute give the same answer with the same text.
+	if spec.Name == ActionResumePrint && derived.State == printerstate.StateResuming {
+		return &Error{Code: CodeUnavailable, Message: "a resume is already in progress: the printer is running its RESUME routine (reheat, purge, wipe); follow it with get_printer_status"}
+	}
+	if spec.Name == ActionCancelPrint && derived.StartWindow && !stopDuringStartVerified {
+		return &Error{Code: CodeUnavailable, Message: startWindowCancelRefusal}
 	}
 	if spec.Name == ActionSetLight {
 		if derived.State == printerstate.StateOffline {
@@ -297,10 +360,26 @@ func checkGate(spec actionSpec, derived printerstate.Derived) *Error {
 // from printer (review backlog item 31): the same identity must be used for
 // arming, querying and disarming the watchdog, or a status query can miss
 // what Execute actually armed.
-func (p *Policy) send(ctx context.Context, deps Deps, printer domain.Printer, identity string, settings domain.Settings, spec actionSpec, params Params, snap printerstate.Snapshot, derived printerstate.Derived, locks *acquiredLocks) (Result, error) {
+func (p *Policy) send(ctx context.Context, deps Deps, printer domain.Printer, identity string, settings domain.Settings, spec actionSpec, params Params, snap printerstate.Snapshot, derived printerstate.Derived, locks *acquiredLocks, bind *binding) (Result, error) {
 	switch spec.Name {
 	case ActionStartPrint:
+		if derived.CFSConnected {
+			if bind == nil {
+				// A bare Moonraker start is refused whenever a CFS is connected (V3).
+				return Result{}, &Error{Action: spec.Name, Code: CodeUnavailable, Message: "a bare start is refused while a CFS is connected: the printer would run the file with a stale filament map; start_print must go through the mapping proposal"}
+			}
+			return p.sendStartCFS(ctx, deps, printer, identity, spec, params, snap, derived, locks, bind)
+		}
 		return p.sendStartPrint(ctx, deps, printer, identity, spec, params, snap, derived, locks)
+	case ActionPausePrint:
+		return p.sendPause(ctx, deps, printer, spec, snap, derived, locks)
+	case ActionResumePrint:
+		return p.sendResume(ctx, deps, printer, spec, snap, derived, locks)
+	case ActionCancelPrint:
+		if inStartWindow(snap, derived) {
+			return p.sendStopInWindow(ctx, deps, printer, spec, snap, derived, locks)
+		}
+		return p.sendPolled(ctx, deps, printer, identity, settings, spec, params, snap, derived, locks)
 	case ActionSetLight:
 		return p.sendSetLight(ctx, deps, printer, spec, params, snap, derived)
 	case ActionUploadGCodeFile:
@@ -327,7 +406,7 @@ func (p *Policy) pollUntilSettle(ctx context.Context, deps Deps, printer domain.
 			pending = locks.pl.getPending()
 		}
 		snap = printerstate.Take(ctx, deps.stateDeps(), printer)
-		derived = printerstate.DeriveActivityState(snap, pending)
+		derived = deriveFor(locks.pl, snap, pending)
 		if settleFn(snap, derived) {
 			return snap, derived, true
 		}

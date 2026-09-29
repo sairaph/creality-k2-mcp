@@ -238,7 +238,7 @@ func TestPathsIn_MatchesSocketPackageLayout(t *testing.T) {
 // TestOpenClose_LongHomeNeverTouchesRealTempDir is dev_docs/review-backlog.md
 // item 43's regression test: opening and closing a real daemon.Server whose
 // paths come from DefaultPaths under a long home directory - long enough on
-// its own to push the preferred "<home>/.creality_k2_mcp/daemon/daemon.sock"
+// its own to push the preferred "<home>/.creality-k2-mcp/daemon/daemon.sock"
 // past maxSocketPathBytes, triggering daemonDir's fallback - must never
 // create anything under the REAL os.TempDir(), only under FallbackRoot()
 // (this package's TestMain, testmain_test.go, points that at a short,
@@ -246,7 +246,7 @@ func TestPathsIn_MatchesSocketPackageLayout(t *testing.T) {
 // daemonDir's fallback was hardcoded to os.TempDir() itself, so any test
 // whose HOME/USERPROFILE resolved to a long path - testing.T.TempDir()
 // commonly does, since it embeds the full test name - silently created a
-// creality_k2_mcp-<hash> directory in the real user's real temp directory,
+// creality-k2-mcp-<hash> directory in the real user's real temp directory,
 // never cleaned up.
 func TestOpenClose_LongHomeNeverTouchesRealTempDir(t *testing.T) {
 	home := filepath.Join(string(filepath.Separator), "Users",
@@ -277,6 +277,6 @@ func TestOpenClose_LongHomeNeverTouchesRealTempDir(t *testing.T) {
 
 	after := crealityDirsForTest(realTemp)
 	if leaked := newEntriesForTest(before, after); len(leaked) > 0 {
-		t.Fatalf("Open/Close under a long home created new creality_k2_mcp-* director(ies) in the real OS temp dir %s: %v", realTemp, leaked)
+		t.Fatalf("Open/Close under a long home created new creality-k2-mcp-* director(ies) in the real OS temp dir %s: %v", realTemp, leaked)
 	}
 }

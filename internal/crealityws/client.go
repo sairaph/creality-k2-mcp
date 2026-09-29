@@ -9,8 +9,20 @@
 // than keeping a long-lived connection open.
 //
 // Moonraker is authoritative for gating decisions; this package only
-// corroborates (safety-architecture.md, P3) and is the sole write path for
-// the chamber light, which has no Moonraker-side command of its own.
+// corroborates (safety-architecture.md, P3), except for the CFS signals
+// (printerstate package doc). It is the sole write path for the chamber
+// light, for CFS filament definitions, CFS starts and the start-window stop,
+// none of which has a Moonraker-side command of its own. The writes are exactly these, all fixed
+// shape and all without an acknowledgement frame (cfs.go):
+//
+//   - SetLight: {"lightSw":0|1}
+//   - ModifyMaterial: {"modifyMaterial":{...}} (rewrite one slot definition)
+//   - StartCFSPrint: {"colorMatch":{...}} then {"multiColorPrint":{...}}
+//   - StartSpoolPrint: {"opGcodeFile":"printprt:<path>","enableSelfTest":n}
+//   - Stop: {"stop":1}, used only to cancel during the print-start window
+//
+// The typed reads are BoxsInfo, Materials and GcodeFiles (plan-v0.2.0.md
+// section 1).
 package crealityws
 
 import (
@@ -134,7 +146,7 @@ func (c *Client) ReadStatus(ctx context.Context) (Status, error) {
 	return buildStatus(raw), nil
 }
 
-// SetLight is the only write this package exposes: connect, send
+// SetLight is the chamber-light write: connect, send
 // {"method":"set","params":{"lightSw":0|1}}, then read pushes until lightSw
 // equals the requested value or LightConfirmTimeout elapses, then close.
 //

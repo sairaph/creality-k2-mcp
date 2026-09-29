@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 	"github.com/sairaph/mcp-wizard/render"
 	"golang.org/x/image/draw"
 )
@@ -171,7 +171,7 @@ func getCameraSnapshotHandler(s *Server) func(context.Context, *mcp.CallToolRequ
 		}
 
 		snap := <-stateCh
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		if derived.State == printerstate.StateOffline {

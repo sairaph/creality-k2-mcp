@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // RegistryLoader returns the current printer registry. Tool handlers call it
@@ -236,4 +236,17 @@ type Deps struct {
 	// it could not be) makes every recording tool report the recorder as
 	// unavailable.
 	CameraRecorder CameraRecorder
+}
+
+// derive is the one derivation every MCP tool that shows state or actions
+// uses: the policy engine's (Policy.Derive), which adds this process's
+// start-window record to printerstate's own derivation (plan-v0.2.0.md 8a.1),
+// so the start window is reflected in every tool reply and never disagrees
+// with the gates Execute enforces. Without a policy engine (a nil field in a
+// hand-built Deps) it falls back to the plain derivation.
+func (s *Server) derive(snap printerstate.Snapshot) printerstate.Derived {
+	if s.deps.PolicyEngine != nil {
+		return s.deps.PolicyEngine.Derive(snap)
+	}
+	return printerstate.DeriveActivityState(snap, nil)
 }

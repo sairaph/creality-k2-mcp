@@ -3,7 +3,7 @@ package discovery
 import (
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 func TestMergeMatchesByHostname(t *testing.T) {

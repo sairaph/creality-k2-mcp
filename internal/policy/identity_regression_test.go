@@ -7,8 +7,8 @@ import (
 
 	"github.com/sairaph/mcp-wizard/daemon/socket"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // This file pins review backlog item 31 end to end: an env-override printer

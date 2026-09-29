@@ -18,8 +18,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
 // --- synthetic gcode/3mf builders (this package's own copies; gcodeinfo's

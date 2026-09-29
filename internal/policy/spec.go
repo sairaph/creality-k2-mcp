@@ -3,8 +3,8 @@ package policy
 import (
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // actionSpec is the static, declarative half of dev_docs/safety-architecture.md
@@ -22,13 +22,12 @@ type actionSpec struct {
 	// column: the only printerstate.Bucket values Execute will act in.
 	AllowedBuckets map[printerstate.Bucket]bool
 
-	// BlockedByCFS applies the base CFS rule from 11-state-model.md/
-	// safety-architecture.md section 3.1: while CFS reports connected,
-	// every write is blocked except set_light and camera use. D5 carves out
-	// exactly two further exceptions, pause_print and cancel_print
-	// ("stopping must never be blocked"); every other action, including
-	// this one if BlockedByCFS is true, stays blocked.
-	BlockedByCFS bool
+	// CFS is this action's rule while a CFS is connected (section 3.1 of
+	// dev_docs/plan-v0.2.0.md; cfs.go). It replaces v0.1.0's blanket
+	// BlockedByCFS: pause_print and cancel_print are cfsNone (stopping must
+	// never be blocked by a CFS signal), every other action names what it
+	// needs. Only consulted when the derived state says a CFS is connected.
+	CFS cfsRule
 
 	// Confirmation is the static default; only upload_gcode_file's spec
 	// uses ConfirmationConditional, resolved per call by whether the fresh
@@ -91,7 +90,7 @@ var specs = map[ActionName]actionSpec{
 	ActionStartPrint: {
 		Name:           ActionStartPrint,
 		AllowedBuckets: bucketSet(printerstate.BucketI),
-		BlockedByCFS:   true, // D5: CFS connected blocks start
+		CFS:            cfsStart,
 		Confirmation:   ConfirmationNone,
 		Effects: []string{
 			"START_PRINT heats the bed and nozzle, homes, and cleans the nozzle before printing begins",
@@ -104,7 +103,7 @@ var specs = map[ActionName]actionSpec{
 	ActionPausePrint: {
 		Name:           ActionPausePrint,
 		AllowedBuckets: bucketSet(printerstate.BucketP), // PP explicitly excluded: pause during START_PRINT is unverified
-		BlockedByCFS:   false,                           // D5: pause stays available while CFS connected
+		CFS:            cfsNone,
 		Confirmation:   ConfirmationNone,
 		Effects: []string{
 			"nozzle target drops to 140 C",
@@ -117,7 +116,7 @@ var specs = map[ActionName]actionSpec{
 	ActionResumePrint: {
 		Name:           ActionResumePrint,
 		AllowedBuckets: bucketSet(printerstate.BucketZ),
-		BlockedByCFS:   true, // D5: resume blocked while CFS connected
+		CFS:            cfsResume,
 		Confirmation:   ConfirmationProposalToken,
 		Effects: []string{
 			"reheats the nozzle to the stored pre-pause target",
@@ -130,7 +129,7 @@ var specs = map[ActionName]actionSpec{
 	ActionCancelPrint: {
 		Name:           ActionCancelPrint,
 		AllowedBuckets: bucketSet(printerstate.BucketP, printerstate.BucketPP, printerstate.BucketZ),
-		BlockedByCFS:   false, // D5: cancel stays available while CFS connected
+		CFS:            cfsNone,
 		Confirmation:   ConfirmationProposalToken,
 		Effects: []string{
 			"END_PRINT runs: lifts, retracts if hot, turns off heaters and fans, parks",
@@ -142,7 +141,7 @@ var specs = map[ActionName]actionSpec{
 	ActionSetNozzleTemperature: {
 		Name:           ActionSetNozzleTemperature,
 		AllowedBuckets: bucketSet(printerstate.BucketP, printerstate.BucketI),
-		BlockedByCFS:   true,
+		CFS:            cfsNozzle,
 		Confirmation:   ConfirmationNone,
 		Effects: []string{
 			"changes the running print's nozzle target (while printing), or heats with no job queued and no idle heater shutoff on this printer, until the idle-heat watchdog turns it off (D2)",
@@ -154,7 +153,7 @@ var specs = map[ActionName]actionSpec{
 	ActionSetBedTemperature: {
 		Name:           ActionSetBedTemperature,
 		AllowedBuckets: bucketSet(printerstate.BucketP, printerstate.BucketI),
-		BlockedByCFS:   true,
+		CFS:            cfsNone,
 		Confirmation:   ConfirmationNone,
 		Effects: []string{
 			"changes the running print's bed target (while printing), or heats with no job queued and no idle heater shutoff on this printer, until the idle-heat watchdog turns it off (D2)",
@@ -166,7 +165,7 @@ var specs = map[ActionName]actionSpec{
 	ActionSetFanSpeed: {
 		Name:           ActionSetFanSpeed,
 		AllowedBuckets: bucketSet(printerstate.BucketP, printerstate.BucketI),
-		BlockedByCFS:   true,
+		CFS:            cfsFan,
 		Confirmation:   ConfirmationNone,
 		Effects: []string{
 			"changes the running print's fan speed (while printing)",
@@ -179,7 +178,7 @@ var specs = map[ActionName]actionSpec{
 	ActionSetSpeedFactor: {
 		Name:           ActionSetSpeedFactor,
 		AllowedBuckets: bucketSet(printerstate.BucketP),
-		BlockedByCFS:   true,
+		CFS:            cfsKnownNoError,
 		Confirmation:   ConfirmationNone,
 		Effects:        []string{"runtime only, reset by START_PRINT/END_PRINT"},
 		Commands:       []string{"M220"},
@@ -189,7 +188,7 @@ var specs = map[ActionName]actionSpec{
 	ActionSetFlowFactor: {
 		Name:           ActionSetFlowFactor,
 		AllowedBuckets: bucketSet(printerstate.BucketP),
-		BlockedByCFS:   true,
+		CFS:            cfsRefuse,
 		Confirmation:   ConfirmationNone,
 		Effects:        []string{"runtime only, NOT reset by Creality's macros; start_print resets it defensively (10-hazard-analysis.md 2.4)"},
 		Commands:       []string{"M221"},
@@ -199,7 +198,7 @@ var specs = map[ActionName]actionSpec{
 	ActionSetLight: {
 		Name:           ActionSetLight,
 		AllowedBuckets: allBucketsExcept(), // gated on "not offline" directly, not by bucket (see checkSetLight)
-		BlockedByCFS:   false,              // explicit exception, D5/3.1
+		CFS:            cfsNone,
 		Confirmation:   ConfirmationNone,
 		Effects:        []string{"none: physically inert, drives the chamber light only"},
 		Commands:       []string{"SetLight (port 9999)"},
@@ -208,7 +207,7 @@ var specs = map[ActionName]actionSpec{
 	ActionExcludeObject: {
 		Name:           ActionExcludeObject,
 		AllowedBuckets: bucketSet(printerstate.BucketP, printerstate.BucketZ),
-		BlockedByCFS:   true,
+		CFS:            cfsKnownNoError,
 		Confirmation:   ConfirmationProposalToken,
 		Effects:        []string{"the object stops printing; irreversible for this job"},
 		Commands:       []string{"EXCLUDE_OBJECT"},
@@ -218,7 +217,7 @@ var specs = map[ActionName]actionSpec{
 	ActionUploadGCodeFile: {
 		Name:           ActionUploadGCodeFile,
 		AllowedBuckets: allBucketsExcept(printerstate.BucketU),
-		BlockedByCFS:   true,
+		CFS:            cfsNone,
 		Confirmation:   ConfirmationConditional, // token only when overwriting an existing file
 		Effects:        []string{"none on printer state; never starts a print"},
 		Commands:       []string{"Upload"},
@@ -227,10 +226,21 @@ var specs = map[ActionName]actionSpec{
 	ActionDeleteGCodeFile: {
 		Name:           ActionDeleteGCodeFile,
 		AllowedBuckets: allBucketsExcept(printerstate.BucketU),
-		BlockedByCFS:   true,
+		CFS:            cfsNone,
 		Confirmation:   ConfirmationProposalToken,
 		Effects:        []string{"the file is removed from the gcodes root"},
 		Commands:       []string{"Delete"},
 		SettleTimeout:  10 * time.Second,
+	},
+	ActionSetFilamentDefinition: {
+		Name:           ActionSetFilamentDefinition,
+		AllowedBuckets: bucketSet(printerstate.BucketI),
+		CFS:            cfsQuiescent,
+		Confirmation:   ConfirmationNone,
+		Effects: []string{
+			"rewrites one slot's filament definition stored on the printer (material, brand, colour, and the nozzle temperature range and pressure advance of that catalog entry); the printer recomputes which slots auto-refill treats as interchangeable; persistent until changed again; never moves filament",
+		},
+		Commands:      []string{"modifyMaterial (port 9999)"},
+		SettleTimeout: 10 * time.Second,
 	},
 }

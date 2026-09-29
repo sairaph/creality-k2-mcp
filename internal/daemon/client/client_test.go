@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/daemon/daemontest"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon/daemontest"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
 )
 
 // TestMain sets K2_MCP_NO_AUTOSTART=1 for every test in this package, belt
@@ -25,7 +25,7 @@ import (
 // package-owned temp directory: New calls daemon.DefaultPaths(), and a test
 // here that also redirects HOME/USERPROFILE to a t.TempDir() (long enough
 // on its own to push the preferred path past the socket length budget)
-// would otherwise silently create a creality_k2_mcp-<hash> directory in the
+// would otherwise silently create a creality-k2-mcp-<hash> directory in the
 // real user's real temp directory (dev_docs/review-backlog.md item 43).
 func TestMain(m *testing.M) {
 	os.Setenv(noAutostartEnv, "1")
@@ -40,7 +40,7 @@ func TestMain(m *testing.M) {
 // watchdog's own printer access is never actually exercised here.
 func newTestOptions(t *testing.T) daemon.Options {
 	t.Helper()
-	// Redirect the per-user base directory (~/.creality_k2_mcp, which the
+	// Redirect the per-user base directory (~/.creality-k2-mcp, which the
 	// production Watchdog's registry lookups read from) into a fresh
 	// t.TempDir(), so this test never reads the real user's printer
 	// registry (matching internal/policy/helpers_test.go's setTestHome).
@@ -287,7 +287,7 @@ func TestNew_TestBinaryNeverAutostarts(t *testing.T) {
 func TestCanAutostart_EnvGuardDisablesAutostart(t *testing.T) {
 	t.Setenv(noAutostartEnv, "1")
 
-	c := &Client{executable: filepath.Join("usr", "local", "bin", "creality_k2_mcp")}
+	c := &Client{executable: filepath.Join("usr", "local", "bin", "creality-k2-mcp")}
 	if c.canAutostart() {
 		t.Fatal("canAutostart() = true with K2_MCP_NO_AUTOSTART=1, want false")
 	}
@@ -308,8 +308,8 @@ func TestIsTestBinaryOrGuarded_SuffixMatching(t *testing.T) {
 		{filepath.Join("tmp", "go-build123", "b001", "client.test"), true},
 		{filepath.Join("tmp", "go-build123", "b001", "CLIENT.TEST"), true},
 		{filepath.Join("tmp", "go-build123", "b001", "CLIENT.TEST.EXE"), true},
-		{filepath.Join("C:", "Program Files", "creality_k2_mcp", "creality_k2_mcp.exe"), false},
-		{filepath.Join("usr", "local", "bin", "creality_k2_mcp"), false},
+		{filepath.Join("C:", "Program Files", "creality-k2-mcp", "creality-k2-mcp.exe"), false},
+		{filepath.Join("usr", "local", "bin", "creality-k2-mcp"), false},
 		{"", false},
 	}
 	for _, tc := range cases {

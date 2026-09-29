@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera/decode"
+	"github.com/sairaph/creality-k2-mcp/internal/camera/decode"
 )
 
 // testTimeout returns floor, unless the test binary's own -timeout deadline

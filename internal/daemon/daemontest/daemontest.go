@@ -17,24 +17,24 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
 )
 
-// fallbackDirPrefix matches daemon.go's own "creality_k2_mcp-" literal
+// fallbackDirPrefix matches daemon.go's own "creality-k2-mcp-" literal
 // (paths.go daemonDir).
-const fallbackDirPrefix = "creality_k2_mcp-"
+const fallbackDirPrefix = "creality-k2-mcp-"
 
 // Guard points daemon.FallbackRoot at a short, package-owned temp directory
 // for the duration of m.Run(), so every test in the calling package that
 // resolves daemon.DefaultPaths (directly, or indirectly through
 // internal/daemon/client.New) with a long HOME/USERPROFILE - the common
 // case, since testing.T.TempDir() embeds the full test name - lands inside
-// that directory instead of silently creating a creality_k2_mcp-<hash>
+// that directory instead of silently creating a creality-k2-mcp-<hash>
 // directory in the real user's real temp directory.
 //
 // As a backstop against some future test reaching the fallback a different
 // way (or forgetting to use a short home at all), Guard also snapshots the
-// real OS temp directory's own creality_k2_mcp-* entries before m.Run() and
+// real OS temp directory's own creality-k2-mcp-* entries before m.Run() and
 // again after, and fails the whole test binary if any new one appeared
 // there.
 //
@@ -62,7 +62,7 @@ func Guard(m *testing.M) int {
 	after := crealityDirs(realTemp)
 	if leaked := newEntries(before, after); len(leaked) > 0 {
 		fmt.Fprintf(os.Stderr,
-			"daemontest: %d creality_k2_mcp-* directory(ies) leaked into the real OS temp dir %s during this test run (daemon.FallbackRoot was not honored): %v\n",
+			"daemontest: %d creality-k2-mcp-* directory(ies) leaked into the real OS temp dir %s during this test run (daemon.FallbackRoot was not honored): %v\n",
 			len(leaked), realTemp, leaked)
 		if code == 0 {
 			code = 1
@@ -71,7 +71,7 @@ func Guard(m *testing.M) int {
 	return code
 }
 
-// crealityDirs lists root's own creality_k2_mcp-* subdirectories. A missing
+// crealityDirs lists root's own creality-k2-mcp-* subdirectories. A missing
 // or unreadable root yields an empty set rather than an error: TestMain has
 // no *testing.T to report through, and a root that cannot be listed cannot
 // have leaked anything visible either.

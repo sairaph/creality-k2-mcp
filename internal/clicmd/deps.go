@@ -1,4 +1,4 @@
-// Package clicmd implements creality_k2_mcp's one-shot CLI commands
+// Package clicmd implements creality-k2-mcp's one-shot CLI commands
 // (dev_docs/plan-v0.1.0.md's "TUI and CLI" section, T13a): printers, status
 // and snapshot. Every command calls the same business-logic functions the
 // MCP tools (internal/mcpserver) and, later, the TUI (T13b) call -
@@ -18,13 +18,13 @@ import (
 
 	"github.com/sairaph/mcp-wizard/tui"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	daemonclient "github.com/sairaph/creality_k2_mcp/internal/daemon/client"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerclient"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
-	"github.com/sairaph/creality_k2_mcp/internal/wizard"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	daemonclient "github.com/sairaph/creality-k2-mcp/internal/daemon/client"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerclient"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/wizard"
 )
 
 // CameraSnapshotFunc matches internal/daemon/client.Client.Snapshot's

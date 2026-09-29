@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // ProbeHost identifies one manually entered printer without scanning

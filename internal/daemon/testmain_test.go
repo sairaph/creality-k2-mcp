@@ -11,7 +11,7 @@ import (
 
 // TestMain points FallbackRoot at a short, package-owned temp directory for
 // every test in this package (rather than the real os.TempDir()), and fails
-// the run if a creality_k2_mcp-* directory nonetheless appears in the real
+// the run if a creality-k2-mcp-* directory nonetheless appears in the real
 // OS temp directory anyway (dev_docs/review-backlog.md item 43): this
 // package defines FallbackRoot and daemonDir itself, so its own tests
 // (paths_test.go's fallback tests, daemon_test.go's
@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 	after := crealityDirsForTest(realTemp)
 	if leaked := newEntriesForTest(before, after); len(leaked) > 0 {
 		fmt.Fprintf(os.Stderr,
-			"daemon: %d creality_k2_mcp-* directory(ies) leaked into the real OS temp dir %s during this test run: %v\n",
+			"daemon: %d creality-k2-mcp-* directory(ies) leaked into the real OS temp dir %s during this test run: %v\n",
 			len(leaked), realTemp, leaked)
 		if code == 0 {
 			code = 1
@@ -60,7 +60,7 @@ func crealityDirsForTest(root string) map[string]bool {
 		return out
 	}
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), "creality_k2_mcp-") {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "creality-k2-mcp-") {
 			out[filepath.Join(root, e.Name())] = true
 		}
 	}

@@ -1,7 +1,7 @@
 param(
   [string]$Owner = "sairaph",
-  [string]$Repo = "creality_k2_mcp",
-  [string]$Bin = "creality_k2_mcp",
+  [string]$Repo = "creality-k2-mcp",
+  [string]$Bin = "creality-k2-mcp",
   [string[]]$ConfigureArgs = @()
 )
 
@@ -92,12 +92,46 @@ try {
 }
 Remove-Item $oldTarget -Force -ErrorAction SilentlyContinue
 
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ($userPath -notlike "*$installDir*") {
-  $newPath = "$installDir;$userPath"
-  [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-  $env:Path = "$installDir;$env:Path"
-  Write-Host "  Added $installDir to your PATH. Restart your terminal."
+# Add the install dir to the user PATH. The value is read and written through
+# the registry so %VAR% entries stay unexpanded (GetEnvironmentVariable and
+# SetEnvironmentVariable would expand them and write back a flattened REG_SZ).
+function Add-UserPathEntry([string]$Dir) {
+  $norm = { param($p) $p.Trim().TrimEnd('\') }
+  $want = & $norm $Dir
+  $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+  try {
+    $raw = $key.GetValue("Path", $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    if ($null -eq $raw) { $raw = "" }
+    foreach ($entry in ($raw -split ';')) {
+      if (-not $entry.Trim()) { continue }
+      $expanded = [Environment]::ExpandEnvironmentVariables($entry)
+      if ((& $norm $entry) -ieq $want -or (& $norm $expanded) -ieq $want) { return $false }
+    }
+    $newValue = if ($raw.Trim()) { "$Dir;$raw" } else { $Dir }
+    $key.SetValue("Path", $newValue, [Microsoft.Win32.RegistryValueKind]::ExpandString)
+  } finally {
+    $key.Close()
+  }
+  # Tell running programs (Explorer) that the environment changed; best effort.
+  try {
+    Add-Type -Namespace Win32 -Name EnvBroadcast -MemberDefinition @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+    $result = [UIntPtr]::Zero
+    [void][Win32.EnvBroadcast]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, "Environment", 2, 5000, [ref]$result)
+  } catch { }
+  return $true
+}
+
+try {
+  if (Add-UserPathEntry $installDir) {
+    $env:Path = "$installDir;$env:Path"
+    Write-Host "  Added $installDir to your PATH. Restart your terminal."
+  }
+} catch {
+  Write-Host "  Could not update your PATH: $_" -ForegroundColor Yellow
+  Write-Host "  Add $installDir to your PATH manually." -ForegroundColor Yellow
 }
 
 # --- launch the configurer ---

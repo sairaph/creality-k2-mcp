@@ -168,17 +168,25 @@ func TestSetLight_ConnectFailureIsError(t *testing.T) {
 	}
 }
 
-// TestExportedAPI pins the package's exported surface to exactly ReadStatus
-// and SetLight (decision 8 / safety-architecture.md 3.5: crealityws exposes
-// no write method other than the chamber light). Adding any other Set*
-// method to Client must be a deliberate, reviewed change to this test, not
-// an accident.
+// TestExportedAPI pins the package's exported surface: ReadStatus, the three
+// typed reads (BoxsInfo, Materials, GcodeFiles) and exactly five writes,
+// SetLight, ModifyMaterial, StartCFSPrint, StartSpoolPrint and Stop (plan-v0.2.0.md
+// section 1.3; before v0.2.0 the chamber light was the only write, decision 8 /
+// safety-architecture.md 3.5). Adding any other method to Client must be a
+// deliberate, reviewed change to this test, not an accident.
 func TestExportedAPI(t *testing.T) {
 	typ := reflect.TypeOf(&Client{})
 
 	want := map[string]bool{
-		"ReadStatus": true,
-		"SetLight":   true,
+		"ReadStatus":      true,
+		"BoxsInfo":        true,
+		"Materials":       true,
+		"GcodeFiles":      true,
+		"SetLight":        true,
+		"ModifyMaterial":  true,
+		"StartCFSPrint":   true,
+		"StartSpoolPrint": true,
+		"Stop":            true,
 	}
 
 	got := make(map[string]bool, typ.NumMethod())
@@ -193,7 +201,7 @@ func TestExportedAPI(t *testing.T) {
 	}
 	for name := range got {
 		if !want[name] {
-			t.Errorf("Client has unexpected exported method %s (crealityws must expose no write method besides SetLight)", name)
+			t.Errorf("Client has unexpected exported method %s (crealityws must expose no write method besides SetLight, ModifyMaterial, StartCFSPrint and StartSpoolPrint)", name)
 		}
 	}
 }

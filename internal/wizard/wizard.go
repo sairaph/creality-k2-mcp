@@ -1,5 +1,5 @@
 // Package wizard implements the "Printers" and "Settings" install-wizard
-// steps for creality_k2_mcp (dev_docs/plan-v0.1.0.md decision 4), built on
+// steps for creality-k2-mcp (dev_docs/plan-v0.1.0.md decision 4), built on
 // the mcp-wizard flow.Step abstraction the same way installer.HarnessStep
 // and installer.ApplyStep are built.
 //
@@ -19,8 +19,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sairaph/creality_k2_mcp/internal/discovery"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/discovery"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // DiscoverFunc matches discovery.Discover's signature. Steps and the

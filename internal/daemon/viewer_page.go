@@ -130,7 +130,7 @@ var viewerPageTemplate = template.Must(template.New("viewer").Parse(`<!doctype h
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>creality_k2_mcp camera viewer</title>
+<title>creality-k2-mcp camera viewer</title>
 <style>
   body { font-family: system-ui, sans-serif; background: #111; color: #eee; margin: 0; padding: 16px; }
   h1 { font-size: 1.2em; margin: 0 0 16px; }
@@ -142,7 +142,7 @@ var viewerPageTemplate = template.Must(template.New("viewer").Parse(`<!doctype h
 </style>
 </head>
 <body>
-<h1>creality_k2_mcp camera viewer</h1>
+<h1>creality-k2-mcp camera viewer</h1>
 <div id="printers"></div>
 <script>
 "use strict";

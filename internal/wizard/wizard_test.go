@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/discovery"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/discovery"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
-// isolateHome points domain's baseDir (~/.creality_k2_mcp) at a fresh temp
+// isolateHome points domain's baseDir (~/.creality-k2-mcp) at a fresh temp
 // directory, the same pattern internal/domain's own tests use, so a wizard
 // test never reads or writes a real user's registry or settings file.
 func isolateHome(t *testing.T) string {

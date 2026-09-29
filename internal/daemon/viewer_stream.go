@@ -10,8 +10,8 @@ import (
 
 	h264c "github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/camera/fmp4"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/camera/fmp4"
 )
 
 // streamFragmentDuration is the fmp4 fragment duration used for every

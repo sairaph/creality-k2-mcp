@@ -10,11 +10,11 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/gcodeinfo"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/gcodeinfo"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 	"github.com/sairaph/mcp-wizard/render"
 )
 
@@ -338,7 +338,7 @@ func listGCodeFilesHandler(s *Server) func(context.Context, *mcp.CallToolRequest
 
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		fc, ok := deps.Moonraker.(filesClient)
@@ -451,7 +451,7 @@ func getGCodeFileHandler(s *Server) func(context.Context, *mcp.CallToolRequest, 
 
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		fc, ok := deps.Moonraker.(filesClient)
@@ -550,7 +550,7 @@ func inspectLocalGCodeHandler(s *Server) func(context.Context, *mcp.CallToolRequ
 
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		result, thumbs, err := gcodeinfo.InspectLocalGCode(absPath, gcodeinfo.ReadLimits{})
@@ -620,7 +620,7 @@ func inspectLocal3MFHandler(s *Server) func(context.Context, *mcp.CallToolReques
 
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		result, thumbs, err := gcodeinfo.InspectLocal3MF(absPath, gcodeinfo.ThreeMFOptions{FullSettings: in.FullSettings})

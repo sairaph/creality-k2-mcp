@@ -4,17 +4,22 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // checkBucketAndCFS applies the generic gate every action shares: is the
-// derived bucket in the action's AllowedBuckets, and (unless the action is
-// exempt) is CFS connected (dev_docs/safety-architecture.md section 4.1,
-// D5). set_light bypasses this entirely (checkSetLight has its own rule);
-// every other action calls this first.
+// derived bucket in the action's AllowedBuckets, and does the action's CFS
+// rule (checkCFS, dev_docs/plan-v0.2.0.md section 3.1) allow it while a CFS is
+// connected. set_light bypasses the bucket part (it has its own rule in
+// checkGate); every other action calls this first.
 func checkBucketAndCFS(spec actionSpec, derived printerstate.Derived) *Error {
-	if !spec.AllowedBuckets[derived.Bucket] {
+	// Cancel is allowed while resuming or pausing (bucket T, the RESUME or PAUSE
+	// macro running): it queues behind the macro, and stopping must never be
+	// blocked (supervised session 2026-09-29). It is an explicit exception, not a
+	// bucket change: cancelling (a cancel this server already issued) stays refused.
+	cancelDuringMacro := spec.Name == ActionCancelPrint && (derived.State == printerstate.StateResuming || derived.State == printerstate.StatePausing)
+	if !spec.AllowedBuckets[derived.Bucket] && !cancelDuringMacro {
 		return &Error{
 			Action: spec.Name,
 			Code:   CodeUnavailable,
@@ -22,14 +27,7 @@ func checkBucketAndCFS(spec actionSpec, derived printerstate.Derived) *Error {
 				spec.Name, derived.State, derived.Bucket, strings.Join(nonEmpty(derived.Reasons), "; ")),
 		}
 	}
-	if spec.BlockedByCFS && derived.CFSConnected {
-		return &Error{
-			Action:  spec.Name,
-			Code:    CodeUnavailable,
-			Message: "CFS connected: control tools are disabled until v0.2.0 validates CFS state signals",
-		}
-	}
-	return nil
+	return checkCFS(spec, derived, Params{})
 }
 
 func nonEmpty(reasons []string) []string {

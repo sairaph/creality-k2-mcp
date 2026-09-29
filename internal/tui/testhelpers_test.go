@@ -9,15 +9,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sairaph/mcp-wizard/app"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
-// isolateHome points domain's baseDir (~/.creality_k2_mcp) at a fresh temp
+// isolateHome points domain's baseDir (~/.creality-k2-mcp) at a fresh temp
 // directory, matching internal/wizard and internal/clicmd's own test
 // helpers of the same name, so a test never reads or writes a real user's
 // registry or settings file (AGENTS.md hard testing rule).

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/camera/decode"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/camera/decode"
 )
 
 // subscriberBufferSize is how many access units a slow subscriber can fall

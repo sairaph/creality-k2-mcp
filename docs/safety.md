@@ -1,6 +1,6 @@
 # Safety model
 
-creality_k2_mcp hands a fair amount of control over a physical, heated
+creality-k2-mcp hands a fair amount of control over a physical, heated
 machine to an AI. This page explains, in plain terms, how it is designed so
 that a mistake, a confused model, or a bug is very unlikely to break a
 running print, damage the printer, or leave a heater running unattended.
@@ -111,14 +111,18 @@ checked again, not assumed to still match what the first call saw.
 ### `start_print` is a special case
 
 Nothing the server can read tells it whether the bed is actually physically
-clear of a previous print. Because of that, `start_print` carries no
-`confirm_token` at all - a token would only create a false sense that the
+clear of a previous print. Because of that, a `start_print` without a CFS carries
+no `confirm_token` at all - a token would only create a false sense that the
 server had verified something it fundamentally cannot. Instead, its
 description explicitly instructs the AI to ask you to confirm the bed is
 clear before ever calling it. This is the one place in the whole design
 where the check is entirely your own responsibility rather than something
 the server enforces; see dev_docs/safety-architecture.md's decision log
 (D4) for the full reasoning.
+
+With a CFS connected the token exists for a different reason: it binds the
+filament mapping you were shown (see [CFS](#cfs-multi-material-support)). It
+still does not verify the bed, and the AI is still instructed to ask you.
 
 ## Bands: bounded, not unlimited, mid-print changes
 
@@ -174,13 +178,167 @@ behind it.
 
 ## CFS (multi-material) support
 
-The K2 CFS filament system is not yet supported for control in this
-version: while the printer reports a CFS unit connected, starting a print,
-resuming, and setpoint changes are all blocked (pause and cancel of an
-already-running print stay available, since stopping must never be blocked).
-Monitoring and the camera keep working normally either way. Full CFS
-support is planned for v0.2.0, once its state signals have been captured and
-validated live.
+The CFS changes what is safe to write, but no single printer signal says "the CFS
+is busy". The server therefore reads a small set of signals (port 9999 `deviceState`,
+`feedState`, `materialStatus`, `err`, `repoPlrStatus`, `upgradeStatus`, `cfsConnect`,
+and Moonraker's `box` and `pause_resume.resume_err`) and derives three flags next
+to the normal state, never instead of it, so a running print is never shadowed:
+
+- **Known:** every one of those signals was positively read (port 9999 reachable,
+  no field missing, and Moonraker and 9999 agree the CFS is connected).
+- **Error:** an error code, a material error, a resume error or a filament runout
+  is present.
+- **Quiescent:** Known, no error, and at rest (idle device and feeder, no recovery
+  or upgrade). Only positive idle values count; anything else is busy or unknown.
+  It is used for idle decisions only, since the device state during a print is not
+  the idle value.
+
+A brief bus drop where the CFS reports disconnected but a unit still says connected
+keeps the CFS rules in force.
+
+### What each tool needs
+
+| Rule | Tools | Allowed with a CFS connected when |
+| --- | --- | --- |
+| none | `pause_print`, `cancel_print`, `set_light`, `set_bed_temperature`, `upload_gcode_file`, `delete_gcode_file` | the normal state rules allow it (stopping is never blocked by a CFS signal; upload, delete and bed temperature have no CFS interaction) |
+| known, no error | `exclude_object`, `set_speed_factor` | the CFS is Known and has no error |
+| fan | `set_fan_speed` | idle: Quiescent. Printing: Known and no error |
+| nozzle | `set_nozzle_temperature` | idle: Quiescent. Printing: refused |
+| refuse | `set_flow_factor` | never |
+| start | `start_print` | Quiescent, then the mapping proposal |
+| resume | `resume_print` | a clean pause this server issued (below) |
+| quiescent | `set_filament_definition` | Quiescent |
+
+Why:
+
+- **Nozzle temperature during a print is refused (V5).** A CFS changes the nozzle
+  temperature itself during filament changes and this server cannot detect a
+  change, so a value it set could be overwritten or fight the CFS.
+- **Flow is refused whenever a CFS is connected (V5).** Flow scales the purge
+  volumes of a filament change.
+- **A start goes through a mapping proposal (V3).** A bare Moonraker start is
+  refused, because it would run the file with the printer's stale filament map. The
+  proposal reproduces Creality's own "print a file on the printer" path: the
+  server computes the mapping with Creality's algorithm, shows it with each slot's
+  refill group and a warning when the printer may run another slot of the group, and
+  only after you confirm sends the colour map, checks that Moonraker's own map matches
+  it (no start frame is sent on a mismatch), and then sends the start. The token binds
+  the mapping, the file's identity (size, creation time, filament list) and every slot
+  definition, so any change refuses. The result says `sent`, never `started`.
+- **Resume is only for a clean pause this server issued (V4, 8a.5).** The pause is
+  recorded only if the CFS was Known and error free when it settled; the record holds
+  the job, the filament map, `box.enable` and a hash of every slot. Resume needs the
+  record for the same job, a clean CFS, a device that is not loading or unloading,
+  the feeder at rest, no recovery or upgrade pending, no resume error, and the map,
+  enable flag and slots unchanged. A pause made at the printer screen, after a runout,
+  or by another process is not resumable from here: resume on the printer screen or
+  in Creality Print. The record lives in this server's memory and is cleared as soon
+  as any snapshot shows the job not paused.
+- **Editing a slot is idle-only and read back (V2).** The edit sends Creality's own
+  `modifyMaterial` with every field from one catalog entry, re-checks everything
+  immediately before sending, and confirms only when the printer's pushed slot shows
+  the new values with editing complete and the regrouped refill groups, and Moonraker
+  agrees.
+
+### The start window
+
+After a start frame the printer runs a self-test of several minutes with the job
+still reported as standby (or as the previous job's complete or cancelled). Without
+care that would look like an idle printer. Two things cover it: the printer's own
+signals derive `preparing`, and this server keeps an in-memory record of a start it
+sent. The signals, with print_stats standby, complete or cancelled: the 9999 state
+reading 9 or 1 (a start in progress; observed live within a second of the start frame),
+7 (stopping), the self-test progress not finished, or a filament map that is not the
+identity map. The record ends after 15 minutes, when print_stats shows printing, paused
+or error, when it shows complete or cancelled for a different job (a different filename,
+metadata uuid or start time; a new printer print id alone does not end it), or when the
+9999 state reads 3 or 4 (a stopped or failed start) in a snapshot taken a few seconds
+after the start frame. State 4 (aborted) persists at rest after a stop and is never read
+as busy.
+
+While the window is open the state is bucket `preparing`: every setpoint, slot edit and
+start is refused, and uploading over or deleting the file being started is refused;
+`set_light`, uploads or deletes of other files, and `cancel_print` still work.
+
+Cancelling during the window sends Creality's own 9999 stop instead of Moonraker's cancel,
+which does not stop the self-test (print_stats has no job yet). This was verified live: 9999
+state 7 (stopping) appears right after the frame, the printer finishes its current self-test
+step (about 20 s), turns the heaters off, returns the map to identity, and is idle about a
+minute after the frame. The reply returns as soon as state 7 or 4 shows (up to 15 s) with
+effect `stopping` (or `sent` if neither is seen) and does not wait for the wind-down.
+
+The record lives in one server process. A second MCP client, or a restart, does not
+see it: it still sees the printer's own signals, which cover the window from the moment
+the 9999 state changes, but not the very first instant of a start. The CLI and the TUI
+likewise derive state from the printer's signals alone.
+
+After a refused map (`refused_map_mismatch`) the colour map had already been sent, so the
+printer may keep a non-identity map until the next start and show `preparing` with
+nothing printing; the reply says so and asks for the map to be cleared at the printer
+rather than for a blind retry.
+
+Two flow-factor rules go with a CFS start. The start resets the flow factor to 100%
+first when it is not already (the purge volumes of a filament change depend on it), and
+restores the previous value only if the start is refused or definitely not sent: that
+restore is the one flow write that bypasses the "no flow changes with a CFS" rule, because
+it puts back the user's own earlier value. Once the start frame was sent, or may have been,
+the flow stays at 100%.
+
+### Pausing and resuming
+
+Moonraker answers pause, resume and cancel only after the whole macro has run, so on a K2
+the tools do not wait for it. A K2 pause takes about 17-20 s (park, wipe) and a resume runs
+the RESUME routine (reheat to the stored target, purge, wipe) for 60 to 75 s, both with the
+job still reported as printing or paused. Pause and resume therefore send their Moonraker
+request from a background task with a 120 s timeout, mark it in an in-flight record on the
+printer lock, and release the per-printer lock BEFORE the reply waits for the printer's
+first sign, so a cancel issued meanwhile is never answered with a conflict.
+
+- **Pause** replies `confirmed` once the job reports paused, or `pausing` as soon as 9999 shows
+  the PAUSE routine (state 5 or 6) within 30 s. While the record is active and the job is
+  still printing, the state is `pausing` (bucket T): every write is refused except
+  `cancel_print`, which queues behind the macro. The resume record (the clean-CFS pause record)
+  is made when a snapshot shows the pause settled, from the tool's own poll or from the next
+  call; the pause record ends when the job is paused, on a terminal print_stats state, or after
+  3 minutes.
+- **Resume** replies `confirmed` once the job is printing, or `resuming` as soon as 9999 shows
+  state 8 (the RESUME routine) within 20 s. The resume record makes the state `resuming` (bucket
+  T) while print_stats is still paused, whether or not 9999 shows anything, and also derives it
+  over a homing sub-phase (RESUME homes X/Y first). A second resume while it is active is
+  refused ("a resume is already in progress"), so a dropped 9999 frame can never lead to a
+  second reheat and purge. The record ends when the job is printing again, on a terminal
+  state, or after 5 minutes. 9999 state 8 while print_stats is paused also derives `resuming`
+  by itself (a resume started on the printer), and the status text then says the printer
+  reports it is resuming.
+- **Cancel** is allowed while pausing or resuming (an explicit exception; other writes stay
+  refused).
+- A send whose HTTP call fails is reported as such: an HTTP status rejection from Moonraker is
+  never promoted to accepted even if the printer happens to be paused (nothing is recorded); a
+  transport error or timeout leaves the effect unknown, so the printer state decides, and only
+  for cancel does a confirmed effect after such an error count as accepted.
+
+### Verified on hardware, and what is not
+
+Verified in the supervised session (2026-09-29): a CFS start with a requested map (the
+printer's map was exactly the requested one and returned to identity after the stop),
+stopping during the self-test, pause and resume of a CFS print, and editing the side
+spool (both channels confirmed). Each of these has a switch in the code that is now on:
+`stopDuringStartVerified` and `sideSpoolEditVerified`.
+
+Still off: `spoolStartVerified`, starting from the side spool with a CFS connected. With a
+CFS connected the side spool is not in the feed path, so it could not be tested; it stays
+refused. A tool change during a print was also observed live (see the next section).
+
+### What cannot be detected
+
+These are not visible to the server, so it asks you instead of guessing: a tool
+change during a print (which is also why the nozzle and flow are refused: live, the extruder
+filament sensor and 9999 materialDetector1 flip while the old filament retracts, the printer
+itself raised the nozzle target to 265 then 270 C to flush, and feedState and deviceState did
+not change), whether a
+slot physically holds filament, and a spool being pre-loaded or an RFID scan in
+progress. Every mapping proposal says the slots cannot be checked for physical
+filament.
 
 ## What every result tells you
 
@@ -200,7 +358,8 @@ retrying, rather than just failing silently.
   printer's own screen or in Creality Print, then confirmed with another
   status check.
 - No firmware or service restarts, no emergency stop.
-- No control over a connected CFS unit (planned for v0.2.0).
+- No filament loading or unloading, no CFS error dismissal, and no editing of RFID-tagged
+  spools, and no start from the side spool with a CFS connected: those stay on the printer.
 
 See [tools.md](tools.md) for the exact parameters, state requirements and
 `confirm_token` behavior of every individual tool.

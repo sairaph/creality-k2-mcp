@@ -17,6 +17,18 @@ import (
 // itself issued but has not yet seen settle; a nil pending is always
 // inactive, matching "no write in flight".
 func DeriveActivityState(snap Snapshot, pending *PendingAction) Derived {
+	d := deriveActivityState(snap, pending)
+	// The CFS flags are attached here, once, for every return path of the
+	// derivation below (plan-v0.2.0.md section 2.3): a return site that
+	// forgot them would leave CFSError false, which is fail-open. d.CFSConnected
+	// (not a fresh cfsConnected call) drives the flags because the early-return
+	// rows report it true without inspecting the box at all.
+	d.CFSKnown, d.CFSQuiescent, d.CFSError, d.CFSReasons = cfsFlagsFor(snap, d.CFSConnected)
+	return d
+}
+
+// deriveActivityState is the row-by-row derivation DeriveActivityState wraps.
+func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 	now := snap.Taken
 
 	// Row 1: offline. server/info itself could not be reached.
@@ -74,6 +86,20 @@ func DeriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 		}
 	}
 
+	// Row 8a: resuming, signal-fed (supervised session 2026-09-29). The K2's
+	// RESUME macro (reheat, purge, wipe) runs for 60 to 75 s with print_stats
+	// still "paused" and pause_resume.is_paused still true; 9999 state 8 is that
+	// routine. Without this row the printer derives paused for the whole time and
+	// a second resume would be proposed under a running one. Bucket T, so every
+	// write is refused except the explicit cancel exception (cancel queues behind
+	// the macro; stopping must never be blocked). It is evaluated before the
+	// homing and calibrating rows because RESUME homes X/Y first when they are
+	// unhomed: cancel must stay allowed through that sub-phase too.
+	if snap.PrintStats != nil && snap.PrintStats.State == "paused" && snap.WS9999.State.Present && snap.WS9999.State.Value == 8 {
+		return transitioning(StateResuming, cfsOK, cfsReason,
+			"9999 state is 8 (the RESUME routine: reheat, purge, wipe) while print_stats is still paused")
+	}
+
 	// Row 4: homing.
 	if ok, reason := isHoming(snap); ok {
 		return busy(StateHoming, BucketB, cfsOK, reason, cfsReason)
@@ -118,6 +144,25 @@ func DeriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 			fmt.Sprintf("resume pending since %s, not yet settled", pending.IssuedAt.Format(rfc3339)))
 	}
 
+	// Row 10a: start window (plan 8a.1, review-2 MF1, safety review M2). After
+	// a CFS or spool start frame the printer runs a 3-4 minute self-test
+	// before print_stats leaves its previous value, which would otherwise
+	// derive as idle, complete or cancelled (bucket I) and let every write
+	// through while blocking cancel. print_stats standby, complete or
+	// cancelled (Klipper keeps the previous job's complete or cancelled until
+	// the next job starts) plus a 9999 withSelfTest that is not 100, or a
+	// non-identity box.map, is "preparing" (bucket PP: cancel allowed,
+	// everything else refused). It sits before the cancelled and complete rows
+	// so they cannot grant bucket I first, and after paused, printing's own
+	// rows and the transitions, so it can never shadow printing or paused. The
+	// policy layer adds its own in-flight record for the window before either
+	// signal has appeared.
+	if ok, reason := startWindowSignal(snap); ok {
+		d := busy(StatePreparing, BucketPP, cfsOK, reason, cfsReason)
+		d.StartWindow = true
+		return d
+	}
+
 	// Row 11: cancelled (settled).
 	if isSettledCancelled(snap) {
 		return Derived{
@@ -160,10 +205,14 @@ func DeriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 		}
 	}
 
-	// Row 14: filament_operation / cfs_operation. No printer-reported signal
-	// reliably marks either as busy (11-state-model.md section 1.1 row 14);
-	// the only conservative signal available is this server's own pending
-	// lock on an operation it just started.
+	// Row 14: filament_operation / cfs_operation. Two sources: this server's
+	// own pending lock on an operation it just started (the conservative
+	// signal 11-state-model.md section 1.1 row 14 allows), and, since v0.2.0,
+	// the 9999 CFS feed signals (cfsSignalOperation, plan 2.4). It sits after
+	// printing, paused and complete on purpose (V6): a feed during a print is
+	// ordinary and must not turn printing into bucket U, so a standby printer
+	// that is feeding is filament_operation while cancelled/complete stay
+	// bucket I with CFSQuiescent false and the policy layer refuses on that.
 	if pending.Active(now, PendingFilamentOperation) {
 		return unknown(StateFilamentOperation, BucketU, cfsOK,
 			"server-initiated filament operation in progress with no reliable completion signal")
@@ -171,6 +220,9 @@ func DeriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 	if pending.Active(now, PendingCFSOperation) {
 		return unknown(StateCFSOperation, BucketU, cfsOK,
 			"server-initiated CFS operation in progress with no reliable completion signal")
+	}
+	if ok, reason := cfsSignalOperation(snap, cfsOK); ok {
+		return unknown(StateFilamentOperation, BucketU, cfsOK, reason)
 	}
 
 	// Row 15: upgrading. 9999-only signal; only fires when 9999 answered and
@@ -299,7 +351,8 @@ func checkIdentity(snap Snapshot) (state string, reason string, ok bool) {
 
 // cfsConnected implements dev_docs/safety-architecture.md section 3.1's CFS
 // rule: box.state other than "disconnect" (including box.state missing, or
-// the whole box object missing), OR 9999 cfsConnect present and non-zero.
+// the whole box object missing), OR 9999 cfsConnect present and non-zero, OR
+// any per-unit state (Box.Units T1..T4) equal to "connect".
 // Both box.State==nil and Box==nil fail closed to "connected" per
 // moonraker.Box.Connected's own doc comment and P1: an unrecognised or
 // missing state must never be silently treated as safe to control around.
@@ -315,6 +368,11 @@ func cfsConnected(snap Snapshot) (bool, string) {
 	}
 	if snap.WS9999.CfsConnect.Present && snap.WS9999.CfsConnect.Value != 0 {
 		return true, fmt.Sprintf("cfs_connected: box.state is disconnect but 9999 cfsConnect is %d", snap.WS9999.CfsConnect.Value)
+	}
+	// A brief bus drop can report box.state disconnect while a unit still
+	// says connect (plan 2.2); the CFS rules must not lift on that.
+	if snap.Box.AnyUnitConnected() {
+		return true, "cfs_connected: box.state is disconnect but a unit (T1..T4) still reports connect"
 	}
 	return false, "cfs_connected: box.state is disconnect and 9999 cfsConnect is 0 or unreported"
 }
@@ -360,7 +418,14 @@ func isCalibrating(snap Snapshot) (bool, string) {
 	if snap.CustomMacro != nil && snap.CustomMacro.LevelingCalibration != nil && *snap.CustomMacro.LevelingCalibration != 0 {
 		return true, "custom_macro.leveling_calibration is nonzero"
 	}
-	if snap.VirtualSDCard != nil && snap.VirtualSDCard.BedMeshCalibrateState != nil && *snap.VirtualSDCard.BedMeshCalibrateState {
+	// bed_mesh_calibate_state stays true for the whole print after the
+	// pre-print self-test levels the bed (observed live 2026-09-29, CFS print
+	// started with the self-test). A job that is printing or paused is
+	// therefore never "calibrating" because of this flag alone: otherwise the
+	// running print derives bucket B and pause/cancel become unavailable,
+	// which "stopping must never be blocked" forbids.
+	if snap.VirtualSDCard != nil && snap.VirtualSDCard.BedMeshCalibrateState != nil && *snap.VirtualSDCard.BedMeshCalibrateState &&
+		!jobPrintingOrPaused(snap) {
 		return true, "virtual_sdcard.bed_mesh_calibate_state is true"
 	}
 	if snap.WS9999.Raw != nil {
@@ -372,6 +437,12 @@ func isCalibrating(snap Snapshot) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// jobPrintingOrPaused reports whether print_stats shows a job that is
+// printing or paused.
+func jobPrintingOrPaused(snap Snapshot) bool {
+	return snap.PrintStats != nil && (snap.PrintStats.State == "printing" || snap.PrintStats.State == "paused")
 }
 
 // truthy reports whether a raw decoded JSON value (float64, string or bool,

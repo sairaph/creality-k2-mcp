@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
 	"github.com/sairaph/mcp-wizard/daemon/socket"
 )
 

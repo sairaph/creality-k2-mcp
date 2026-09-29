@@ -1,6 +1,6 @@
 # Camera
 
-creality_k2_mcp talks to the K2's onboard chamber camera over WebRTC and can
+creality-k2-mcp talks to the K2's onboard chamber camera over WebRTC and can
 show a live view in your browser, take snapshots, and record video or
 timelapse stills. This page covers how that system works end to end: the
 shared connection, where files land, the numeric limits, and troubleshooting.
@@ -10,7 +10,7 @@ CLI commands see [cli.md](cli.md).
 ## Overview
 
 All camera access goes through a small background daemon
-(`creality_k2_mcp camera serve`, started automatically the first time it is
+(`creality-k2-mcp camera serve`, started automatically the first time it is
 needed - opening the live view, taking a snapshot, starting a recording, or
 arming the idle-heat watchdog). The daemon owns exactly one WebRTC connection
 per printer's camera and shares it across every consumer at once: the browser
@@ -29,7 +29,7 @@ reconnecting.
 
 ## Snapshot
 
-`get_camera_snapshot` (MCP tool) and `creality_k2_mcp snapshot` (CLI) both
+`get_camera_snapshot` (MCP tool) and `creality-k2-mcp snapshot` (CLI) both
 capture one still frame through the same daemon path (`Hub.Snapshot`), with
 the printer's current state checked concurrently rather than beforehand, so
 the two run in parallel and the call's total latency is close to whichever
@@ -49,7 +49,7 @@ capture as a JPEG at quality 92.
 
 ## Local live view
 
-`open_camera_view` (MCP tool) and `creality_k2_mcp camera open` (CLI) both
+`open_camera_view` (MCP tool) and `creality-k2-mcp camera open` (CLI) both
 return a URL for a continuously updating browser view, served by the daemon
 over Media Source Extensions (MSE) as fragmented MP4. The viewer's HTTP
 server binds `127.0.0.1` only - it is never reachable from another device or
@@ -77,7 +77,7 @@ rather than hammering the daemon.
 ## Recording
 
 `start_recording` / `stop_recording` / `list_recordings` / `delete_recording`
-(MCP tools) and `creality_k2_mcp camera record|stop|recordings|delete` (CLI)
+(MCP tools) and `creality-k2-mcp camera record|stop|recordings|delete` (CLI)
 manage recordings. Only one recording (video or timelapse) may be active per
 printer at a time.
 
@@ -86,7 +86,7 @@ printer at a time.
 Writes a fragmented MP4 file to:
 
 ```
-~/.creality_k2_mcp/recordings/<printer-id>/<timestamp>.mp4
+~/.creality-k2-mcp/recordings/<printer-id>/<timestamp>.mp4
 ```
 
 Fragments are written and fsynced as they go, so the file stays playable up
@@ -173,7 +173,7 @@ What to check when you see this:
 
 - The printer is powered on and its screen is responsive.
 - The printer is reachable on the LAN generally (`get_printer_status` /
-  `creality_k2_mcp status` answers normally).
+  `creality-k2-mcp status` answers normally).
 - The camera's own port (8000) is reachable - a firewall or an unusually
   restrictive router/AP client-isolation setting can block WebRTC signaling
   or media even when Moonraker's port answers fine.
@@ -181,11 +181,11 @@ What to check when you see this:
   live view and a fresh snapshot request recover on their own once a
   complete keyframe arrives.
 
-### Windows Firewall prompt for `creality_k2_mcp.exe`
+### Windows Firewall prompt for `creality-k2-mcp.exe`
 
 The first time the background daemon opens its local viewer HTTP listener or
 its outbound WebRTC connection to a printer's camera, Windows may show a
-firewall prompt asking whether to allow `creality_k2_mcp.exe` to communicate
+firewall prompt asking whether to allow `creality-k2-mcp.exe` to communicate
 on private and/or public networks. The viewer's own HTTP server only ever
 binds `127.0.0.1` (see Local live view above), so allowing it is safe with
 respect to that listener specifically; the outbound WebRTC connection to the
@@ -211,10 +211,10 @@ Firewall settings.
 
 ### General camera checks
 
-- `creality_k2_mcp doctor` reports whether the background daemon is running
+- `creality-k2-mcp doctor` reports whether the background daemon is running
   and whether the local viewer page answers, without starting the daemon
   just to check it.
-- `get_printer_status` / `creality_k2_mcp status` reports the daemon's live
+- `get_printer_status` / `creality-k2-mcp status` reports the daemon's live
   camera connection state for a printer when the daemon can be reached
   (last time media was received, whether a connection is currently open),
   again without starting the daemon just to check.
@@ -224,5 +224,5 @@ Firewall settings.
   the light on at the printer.
 - The camera stream itself has no authentication on the printer's own LAN
   side: anyone on the same local network as the printer can view its raw
-  camera feed directly (independent of creality_k2_mcp's own local-only,
+  camera feed directly (independent of creality-k2-mcp's own local-only,
   token-gated browser viewer).

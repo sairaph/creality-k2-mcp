@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // tokenTTL is the proposal_token expiry (dev_docs/safety-architecture.md
@@ -27,6 +27,11 @@ type proposal struct {
 	class        printerstate.GatingClass
 	snapshotTime time.Time
 	issuedAt     time.Time
+	// extra is what an action binds beyond params, job and bucket: for a CFS
+	// start the canonical mapping, file identity and a hash of every slot
+	// definition, for a CFS resume the pause record (plan 8a.3); empty for
+	// every other action.
+	extra string
 }
 
 // tokenStore holds outstanding proposals in memory only: a server restart

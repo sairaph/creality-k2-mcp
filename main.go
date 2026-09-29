@@ -21,14 +21,14 @@ import (
 	"github.com/sairaph/mcp-wizard/tui"
 	"github.com/sairaph/mcp-wizard/update"
 
-	"github.com/sairaph/creality_k2_mcp/internal/clicmd"
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	daemonclient "github.com/sairaph/creality_k2_mcp/internal/daemon/client"
-	"github.com/sairaph/creality_k2_mcp/internal/doctorchecks"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/mcpserver"
-	internaltui "github.com/sairaph/creality_k2_mcp/internal/tui"
-	"github.com/sairaph/creality_k2_mcp/internal/wizard"
+	"github.com/sairaph/creality-k2-mcp/internal/clicmd"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	daemonclient "github.com/sairaph/creality-k2-mcp/internal/daemon/client"
+	"github.com/sairaph/creality-k2-mcp/internal/doctorchecks"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/mcpserver"
+	internaltui "github.com/sairaph/creality-k2-mcp/internal/tui"
+	"github.com/sairaph/creality-k2-mcp/internal/wizard"
 )
 
 // version is set by goreleaser via -ldflags "-X main.version=...".
@@ -54,6 +54,13 @@ func init() {
 		Description: "Show one printer's derived state, temperatures, job and CFS flag",
 		Run: func(ctx context.Context, args []string) int {
 			return clicmd.RunStatus(ctx, clicmd.NewDefaultDeps(), args)
+		},
+	})
+	oneShotCommands.Register(command.Handler{
+		Name:        "filaments",
+		Description: "Show the CFS and side spool filament slots (read-only)",
+		Run: func(ctx context.Context, args []string) int {
+			return clicmd.RunFilaments(ctx, clicmd.NewDefaultDeps(), args)
 		},
 	})
 	oneShotCommands.Register(command.Handler{
@@ -267,7 +274,7 @@ func runInstall(ctx context.Context, cmd cli.Command) int {
 	}
 
 	if tui.IsInteractive() && !cmd.Yes {
-		return runWizard(ctx, detector, harness.Scope{}, cmd, "creality_k2_mcp setup")
+		return runWizard(ctx, detector, harness.Scope{}, cmd, "creality-k2-mcp setup")
 	}
 	return runUnattended(ctx, detector, harness.Scope{}, cmd, harness.Present)
 }
@@ -300,7 +307,7 @@ func runAdd(ctx context.Context, cmd cli.Command) int {
 	scope := harness.ProjectScopeDir(dir)
 
 	if tui.IsInteractive() && !cmd.Yes {
-		return runWizard(ctx, detector, scope, cmd, "creality_k2_mcp project setup")
+		return runWizard(ctx, detector, scope, cmd, "creality-k2-mcp project setup")
 	}
 	return runUnattended(ctx, detector, scope, cmd, harness.Present)
 }
@@ -476,7 +483,7 @@ func (clientsCheck) Run(ctx context.Context) doctor.Result {
 		}
 	}
 	if len(configured) == 0 {
-		return doctor.Result{Name: "AI clients", Status: doctor.Warn, Detail: "no client is configured; run `creality_k2_mcp install`"}
+		return doctor.Result{Name: "AI clients", Status: doctor.Warn, Detail: "no client is configured; run `creality-k2-mcp install`"}
 	}
 	return doctor.Result{Name: "AI clients", Status: doctor.OK, Detail: strings.Join(configured, ", ")}
 }
@@ -507,10 +514,10 @@ func runUpdate(ctx context.Context, cmd cli.Command) int {
 		return 1
 	}
 	if !available {
-		fmt.Printf("  creality_k2_mcp %s is up to date.\n", version)
+		fmt.Printf("  creality-k2-mcp %s is up to date.\n", version)
 		return 0
 	}
-	fmt.Printf("  Updating creality_k2_mcp %s -> %s\n", version, latest)
+	fmt.Printf("  Updating creality-k2-mcp %s -> %s\n", version, latest)
 	if err := update.SelfUpdate(ctx, opts); err != nil {
 		fmt.Fprintf(os.Stderr, "  Update failed: %v\n", err)
 		return 1
@@ -674,7 +681,7 @@ func newWatchdogStatusClient() *daemonclient.Client {
 func runCameraCommand(ctx context.Context, cmd cli.Command) int {
 	if len(cmd.Args) > 0 && cmd.Args[0] == "serve" {
 		if len(cmd.Args) != 1 {
-			fmt.Fprintln(os.Stderr, "Usage: creality_k2_mcp camera serve")
+			fmt.Fprintln(os.Stderr, "Usage: creality-k2-mcp camera serve")
 			return 2
 		}
 		return runCameraServe(ctx)

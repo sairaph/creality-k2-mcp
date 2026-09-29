@@ -65,6 +65,15 @@ type Status struct {
 	Err            StatusErr
 	PrintID        Str
 
+	// WithSelfTest and EnableSelfTest are the print-start self-test progress
+	// (100 = finished or never started) and the printer-side self-test
+	// setting (dev_docs/cfs-print-start.md sections 1.2 and 4.3). They are
+	// optional Ints but deliberately not in MissingSafetyFields: a printer
+	// that never reports them simply contributes no start-window signal, and
+	// start_print then defaults the self-test flag to false (plan 8a.7).
+	WithSelfTest   Int
+	EnableSelfTest Int
+
 	// Informational-only fields: see the Status doc comment.
 	Model           string
 	Hostname        string
@@ -145,6 +154,8 @@ func buildStatus(raw map[string]any) Status {
 	s.LightSw = asOptInt(raw["lightSw"])
 	s.Err = asStatusErr(raw["err"])
 	s.PrintID = asOptString(raw["printId"])
+	s.WithSelfTest = asOptInt(raw["withSelfTest"])
+	s.EnableSelfTest = asOptInt(raw["enableSelfTest"])
 	s.Model, _ = asString(raw["model"])
 	s.Hostname, _ = asString(raw["hostname"])
 	s.WebrtcSupport, _ = asInt(raw["webrtcSupport"])

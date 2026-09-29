@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // TestExecute_IdentityMismatch_RefusesAllWrites pins review backlog item 24:

@@ -1,6 +1,6 @@
 # CLI
 
-`creality_k2_mcp` is a single binary that is at once the MCP server, an
+`creality-k2-mcp` is a single binary that is at once the MCP server, an
 install wizard, a TUI, and a set of one-shot commands for scripting or quick
 checks from a terminal. Every one-shot command shares its business logic
 with the MCP tools and the TUI (the same `internal/wizard`, `internal/
@@ -24,20 +24,20 @@ Every command below follows the same convention:
 
 ## Global commands
 
-### `creality_k2_mcp` / `creality_k2_mcp mcp`
+### `creality-k2-mcp` / `creality-k2-mcp mcp`
 
 Runs the MCP server. This is the default when standard input is not a
 terminal (an AI client always sees this), and can also be requested
 explicitly with `mcp`.
 
 ```sh
-creality_k2_mcp mcp
+creality-k2-mcp mcp
 ```
 
 There is also an HTTP transport for advanced setups; see
 [configuration.md](configuration.md) for how to select it.
 
-### `creality_k2_mcp install`
+### `creality-k2-mcp install`
 
 Runs the interactive install wizard (or, with `--yes`, an unattended
 install). The wizard has these steps in order:
@@ -58,9 +58,9 @@ install). The wizard has these steps in order:
 Nothing is written to disk before the Apply step runs.
 
 ```sh
-creality_k2_mcp install
-creality_k2_mcp install --yes --all
-creality_k2_mcp install --client claude-code,claude-desktop
+creality-k2-mcp install
+creality-k2-mcp install --yes --all
+creality-k2-mcp install --client claude-code,claude-desktop
 ```
 
 | Flag | What it does |
@@ -77,33 +77,33 @@ Exit code: 0 on success (including "every client already configured"); 1 if
 applying a client config failed; 2 if `--client` names a client that was not
 detected.
 
-### `creality_k2_mcp add`
+### `creality-k2-mcp add`
 
 The project-scoped equivalent of `install`: registers the server (and,
 non-interactively, discovered printers) under the current directory's own
-`.creality_k2_mcp/` folder and AI client configs, instead of the per-user
+`.creality-k2-mcp/` folder and AI client configs, instead of the per-user
 global ones. Same steps and flags as `install`.
 
 ```sh
 cd my-project
-creality_k2_mcp add --yes
+creality-k2-mcp add --yes
 ```
 
-### `creality_k2_mcp uninstall`
+### `creality-k2-mcp uninstall`
 
 Removes the server from every AI client it is currently registered with (or,
 with `--client`, only the named ones). This never deletes the registry or
 settings files, only each client's own configuration entry.
 
 ```sh
-creality_k2_mcp uninstall
-creality_k2_mcp uninstall --client claude-desktop
+creality-k2-mcp uninstall
+creality-k2-mcp uninstall --client claude-desktop
 ```
 
 Exit code: 0 on success or if nothing was configured; 1 if removing a
 client's config failed.
 
-### `creality_k2_mcp doctor`
+### `creality-k2-mcp doctor`
 
 Diagnoses the installation. Runs, in order:
 
@@ -132,19 +132,19 @@ Diagnoses the installation. Runs, in order:
   automatically the next time either is used.
 
 ```sh
-creality_k2_mcp doctor
+creality-k2-mcp doctor
 ```
 
 Exit code follows the worst result across every check (0 if everything is
 OK or only warnings were found, non-zero if any check failed); every line is
 printed either way.
 
-### `creality_k2_mcp update`
+### `creality-k2-mcp update`
 
 Checks the latest GitHub release and updates in place if a newer one exists.
 
 ```sh
-creality_k2_mcp update
+creality-k2-mcp update
 ```
 
 A from-source `dev` build (no version baked in at release time) prints a
@@ -153,15 +153,15 @@ message and does nothing, since there is nothing to compare against. `update
 downloaded and verified a new binary; there is normally no reason to pass
 it by hand.
 
-### `creality_k2_mcp version`
+### `creality-k2-mcp version`
 
 Prints the running binary's version and exits 0.
 
 ```sh
-creality_k2_mcp version
+creality-k2-mcp version
 ```
 
-### `creality_k2_mcp help` / `-h` / `--help`
+### `creality-k2-mcp help` / `-h` / `--help`
 
 Prints the top-level usage (every command listed above plus the one-shot
 commands below) to stdout and exits 0.
@@ -171,7 +171,7 @@ commands below) to stdout and exits 0.
 These read from and write to the same registry, settings and printer state
 the MCP tools use, without starting a server or opening the TUI.
 
-### `creality_k2_mcp printers`
+### `creality-k2-mcp printers`
 
 Lists, scans for, and manages registered printers.
 
@@ -188,7 +188,7 @@ usage: printers [scan | add <host> | enable <id> | disable <id> | control on|off
 state probe (bounded concurrency, 5 second per-printer timeout):
 
 ```sh
-$ creality_k2_mcp printers
+$ creality-k2-mcp printers
 ID        NAME      HOST           ENABLED  CONTROL  REACHABLE  STATE
 k2-5885   K2-5885   192.168.1.102  yes      no       yes        idle
 ```
@@ -197,7 +197,7 @@ k2-5885   K2-5885   192.168.1.102  yes      no       yes        idle
 changing the registry:
 
 ```sh
-$ creality_k2_mcp printers scan
+$ creality-k2-mcp printers scan
 scanning: 254/254 hosts, 1 found
 HOST           HOSTNAME  MODEL  IDENTIFIED  REGISTERED
 192.168.1.102  K2-5885   F021   yes         no
@@ -211,10 +211,10 @@ host, or use the TUI.
 it (enabled, control off by default):
 
 ```sh
-$ creality_k2_mcp printers add 192.168.1.102
+$ creality-k2-mcp printers add 192.168.1.102
 Added k2-5885 (192.168.1.102), enabled, control off.
 Run `printers control on k2-5885` to allow the AI to control it.
-Registry: /home/me/.creality_k2_mcp/printers.json
+Registry: /home/me/.creality-k2-mcp/printers.json
 ```
 
 `printers enable <id>` / `printers disable <id>` toggle whether a printer's
@@ -227,20 +227,20 @@ on). Turning control on prints a warning naming exactly what it grants
 before it takes effect:
 
 ```sh
-$ creality_k2_mcp printers control on k2-5885
+$ creality-k2-mcp printers control on k2-5885
 Control lets the AI change this printer through the MCP tools: start, pause, resume
 and cancel prints; upload and delete gcode files; set nozzle and bed temperature; fans,
 speed and flow factors; the chamber light; and exclude objects. Only turn this on for a
 printer, and an AI client, you trust with those actions.
 k2-5885: control on.
-Registry: /home/me/.creality_k2_mcp/printers.json
+Registry: /home/me/.creality-k2-mcp/printers.json
 ```
 
 Exit codes: 0 on success; 1 for a runtime failure (unreachable host,
 printer not found, control requested on a disabled printer); 2 for a usage
 error (wrong argument count, unknown subcommand).
 
-### `creality_k2_mcp status [printer] [--json]`
+### `creality-k2-mcp status [printer] [--json]`
 
 Shows one printer's derived state: the same
 `printerstate.Take`/`DeriveActivityState`/`BuildStateBlock` pipeline
@@ -250,7 +250,7 @@ Shows one printer's derived state: the same
 required (id or name, case insensitive).
 
 ```sh
-$ creality_k2_mcp status
+$ creality-k2-mcp status
 K2-5885 (192.168.1.102)
 State: idle   bucket: I   class: available
 Nozzle: 24.1/0.0 C
@@ -258,7 +258,7 @@ Bed: 23.8/0.0 C
 CFS connected: no
 9999 reachable: yes
 
-$ creality_k2_mcp status k2-5885 --json
+$ creality-k2-mcp status k2-5885 --json
 {
   "printer_id": "k2-5885",
   "activity_state": "idle",
@@ -273,7 +273,43 @@ $ creality_k2_mcp status k2-5885 --json
 Exit codes: 0 on success; 1 if the printer could not be resolved; 2 on a
 usage error.
 
-### `creality_k2_mcp snapshot [printer] [--out FILE] [--force]`
+The CLI runs in its own process, so it derives state from the printer's signals
+alone. The MCP server additionally remembers, in memory, a print start it sent
+itself, so during the first moments of a start (before the printer shows any
+self-test signal) the server reports `preparing` where this command may still show
+`idle`. Once the printer shows its self-test progress or its filament map the two
+agree.
+
+### `creality-k2-mcp filaments [printer] [--json]`
+
+Shows the derived state, the CFS state, and the CFS units and side spool slots: the same
+`internal/filaments` code the `get_filaments` tool uses, read-only. The printer argument
+may come before or after `--json`. For each slot: the stored definition (status,
+brand, name, material, colour, nozzle range), whether it is selected at the hub,
+whether `set_filament_definition` could edit it right now and why not (including the
+printer's current state: a printing printer or a busy CFS shows every slot not editable), and the printer's own
+refill groups. Names come from the printer over port 9999; if that cannot be read
+the output says so and shows Moonraker's material codes only.
+
+```sh
+$ creality-k2-mcp filaments
+K2-5885 (192.168.1.102)
+Auto-refill: on
+Unit T1 (MF003), 29 C, 35% humidity
+  T1A         defined, Acme Test PLA, PLA, #ff0000, nozzle 190-240 C (editable)
+  T1B         defined, Acme Test PETG, PETG, #000000, nozzle 220-270 C (editable)
+Refill groups (slots the printer treats as interchangeable): T1A (PLA #ff0000); T1B (PETG #000000)
+```
+
+| Flag | What it does |
+| --- | --- |
+| `--json` | Print the view as JSON instead of the text summary |
+
+A slot status describes the stored definition, not a sensor: whether filament is
+physically loaded cannot be detected. Exit codes: 0 on success; 1 if the printer
+could not be resolved; 2 on a usage error.
+
+### `creality-k2-mcp snapshot [printer] [--out FILE] [--force]`
 
 Saves one still frame from a printer's onboard camera to a local JPEG file,
 through the same background-daemon capture path (`Hub.Snapshot`) the
@@ -284,10 +320,10 @@ cap here: the file is written at full capture resolution, JPEG quality 92.
 Flags may be given before or after the printer argument.
 
 ```sh
-$ creality_k2_mcp snapshot k2-5885 --out chamber.jpg
+$ creality-k2-mcp snapshot k2-5885 --out chamber.jpg
 chamber.jpg
 
-$ creality_k2_mcp snapshot --out chamber.jpg --force k2-5885
+$ creality-k2-mcp snapshot --out chamber.jpg --force k2-5885
 chamber.jpg
 ```
 
@@ -300,7 +336,7 @@ Exit codes: 0 on success; 1 if the printer is offline, unreachable, the
 capture failed, the daemon client is not wired up, or the output file
 exists without `--force`; 2 on a usage error.
 
-### `creality_k2_mcp camera ...`
+### `creality-k2-mcp camera ...`
 
 ```
 usage: camera open|record|stop|recordings|delete ...
@@ -321,7 +357,7 @@ it in the default browser unless `--no-browser` is given. With no printer
 argument, the page lists every enabled printer.
 
 ```sh
-$ creality_k2_mcp camera open k2-5885
+$ creality-k2-mcp camera open k2-5885
 http://127.0.0.1:PORT/view?printer=k2-5885&token=...
 ```
 
@@ -335,11 +371,11 @@ Starts a recording and prints its id (and, for `video` mode, its file path
 once one exists; `timelapse` has no single file to report at start time).
 
 ```sh
-$ creality_k2_mcp camera record k2-5885 --mode video
+$ creality-k2-mcp camera record k2-5885 --mode video
 k2-5885/20260928T150405Z
-/home/me/.creality_k2_mcp/recordings/k2-5885/20260928T150405Z.mp4
+/home/me/.creality-k2-mcp/recordings/k2-5885/20260928T150405Z.mp4
 
-$ creality_k2_mcp camera record k2-5885 --mode timelapse
+$ creality-k2-mcp camera record k2-5885 --mode timelapse
 k2-5885/20260928T150500Z
 (timelapse: JPEG stills will be written as layers change; run `camera recordings` to check on it)
 ```
@@ -356,7 +392,7 @@ Stops the active recording, resolved either from a printer id/name (its
 currently active recording) or a raw recording id.
 
 ```sh
-$ creality_k2_mcp camera stop k2-5885
+$ creality-k2-mcp camera stop k2-5885
 Stopped recording k2-5885/20260928T150405Z (requested). Duration 312s, 41802112 bytes across 3 part(s).
 ```
 
@@ -365,7 +401,7 @@ Stopped recording k2-5885/20260928T150405Z (requested). Duration 312s, 41802112 
 Lists recordings, optionally filtered to one printer.
 
 ```sh
-$ creality_k2_mcp camera recordings
+$ creality-k2-mcp camera recordings
 ID                           PRINTER  MODE   ACTIVE  STARTED               DURATION_S  BYTES     PARTS  FRAMES  STOP_REASON
 k2-5885/20260928T150405Z     k2-5885  video  no      2026-09-28T15:04:05Z  312         41802112  3      0       requested
 
@@ -380,7 +416,7 @@ with no `--yes`, this is refused outright (exit 2) rather than doing nothing
 silently or deleting without asking.
 
 ```sh
-$ creality_k2_mcp camera delete k2-5885/20260928T150405Z --yes
+$ creality-k2-mcp camera delete k2-5885/20260928T150405Z --yes
 Deleted recording k2-5885/20260928T150405Z.
 ```
 
@@ -408,4 +444,5 @@ period.
   these commands read and write.
 - [Camera](camera.md) for what `camera open`/`record`/`snapshot` actually
   capture and where files land.
-- [Tools](tools.md) for the MCP tool each command mirrors.
+- [Tools](tools.md) for the MCP tool each command mirrors. `status` mirrors
+  `get_printer_status` and `filaments` mirrors `get_filaments`.

@@ -14,8 +14,8 @@ import (
 	"github.com/sairaph/mcp-wizard/app/list"
 	"github.com/sairaph/mcp-wizard/app/menu"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // snapshotJPEGQuality matches internal/clicmd/snapshot.go's own constant:

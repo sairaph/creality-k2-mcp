@@ -10,11 +10,11 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // This file exercises tools_control.go end to end through the real MCP wire
@@ -324,6 +324,37 @@ func (f *fakeWS9999Control) SetLight(ctx context.Context, on bool) (bool, error)
 	}
 	return true, nil
 }
+
+// The CFS reads and writes policy.WS9999Client gained in v0.2.0 (plan 3.2). The
+// control-tool tests never reach them (no CFS is connected in this fake), so
+// each reports the port as unreachable.
+var errFakeNoCFS = fmt.Errorf("the control-test fake has no CFS")
+
+func (f *fakeWS9999Control) BoxsInfo(ctx context.Context) (crealityws.BoxsInfo, error) {
+	return crealityws.BoxsInfo{}, errFakeNoCFS
+}
+
+func (f *fakeWS9999Control) Materials(ctx context.Context) ([]crealityws.CatalogEntry, error) {
+	return nil, errFakeNoCFS
+}
+
+func (f *fakeWS9999Control) GcodeFiles(ctx context.Context) ([]crealityws.GcodeFileInfo, error) {
+	return nil, errFakeNoCFS
+}
+
+func (f *fakeWS9999Control) ModifyMaterial(ctx context.Context, e crealityws.MaterialEdit) (*crealityws.BoxsInfo, bool, error) {
+	return nil, false, errFakeNoCFS
+}
+
+func (f *fakeWS9999Control) StartCFSPrint(ctx context.Context, path string, items []crealityws.ColorMatchItem, selfTest bool, verifyMap func(ctx context.Context) error) (bool, error) {
+	return false, errFakeNoCFS
+}
+
+func (f *fakeWS9999Control) StartSpoolPrint(ctx context.Context, path string, selfTest bool) (bool, error) {
+	return false, errFakeNoCFS
+}
+
+func (f *fakeWS9999Control) Stop(ctx context.Context) (bool, error) { return false, errFakeNoCFS }
 
 // --- Test harness ---
 

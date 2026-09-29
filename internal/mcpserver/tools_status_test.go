@@ -1,14 +1,15 @@
 package mcpserver
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // rawQueryResp mirrors the top-level shape of a Moonraker
@@ -237,6 +238,9 @@ func TestStatusGuidanceTransitioningStatesSuggestNoWrite(t *testing.T) {
 			if name == policy.ActionSetLight {
 				continue // set_light stays legal in every bucket but offline
 			}
+			if name == policy.ActionCancelPrint && (state == printerstate.StatePausing || state == printerstate.StateResuming) {
+				continue // cancel is the explicit exception while a pause or resume macro runs
+			}
 			if strings.Contains(body, string(name)) {
 				t.Fatalf("statusGuidance(%s) = %q, must not mention %q (bucket T blocks every write except set_light)", state, body, name)
 			}
@@ -311,47 +315,135 @@ func TestStatusGuidanceIdentityStatesRefuseEveryAction(t *testing.T) {
 	}
 }
 
-// TestStatusGuidanceCFSConnectedNote confirms the CFS-connected note is
-// appended verbatim regardless of which state it follows, and correctly
-// states that pause/cancel stay available while start/resume/setpoints do
-// not (D5), cross-checked against internal/policy's BlockedByCFS/AllowedBuckets
-// for a printing job with CFS connected.
+// TestStatusGuidanceCFSConnectedNote confirms the per-state CFS guidance
+// (dev_docs/plan-v0.2.0.md 2.5, 3.1, 8a.6) says what works for each cfs state
+// and activity state, and never claims a tool the policy's own gates refuse
+// (surface review M1): paused, the start window and printing differ.
 func TestStatusGuidanceCFSConnectedNote(t *testing.T) {
-	block := printerstate.StateBlock{ActivityState: printerstate.StatePaused, CFSConnected: true}
-	body := statusGuidance(block)
-
-	for _, want := range []string{"CFS unit reports connected", "start, resume and setpoint", "pause and cancel", "stay available"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("statusGuidance(paused, CFS connected) = %q, missing %q", body, want)
+	cases := []struct {
+		name     string
+		activity string
+		window   bool
+		cfs      string
+		want     []string
+		never    []string
+	}{
+		{"idle", printerstate.StateIdle, false, printerstate.CFSStateIdle, []string{"two-step mapping proposal", "set_filament_definition", "flow factor is never changed"}, nil},
+		{"printing", printerstate.StatePrinting, false, printerstate.CFSStateInPrint, []string{"set_fan_speed, set_speed_factor and exclude_object are available",
+			"pause_print and cancel_print are never blocked by a CFS signal", "nozzle temperature and the flow factor cannot be changed", "clean pause this server issued"}, nil},
+		{"paused", printerstate.StatePaused, false, printerstate.CFSStateInPrint, []string{"The print is paused", "cancel_print", "resume_print only for a clean pause this server issued",
+			"Pause, fan and speed changes are not available while paused", "printer screen or in Creality Print"}, []string{"are never blocked", "set_speed_factor and exclude_object are available", "always work"}},
+		{"start window", printerstate.StatePreparing, true, printerstate.CFSStateInPrint, []string{"start window", "set_light", "cancel_print sends Creality's own stop", "returns to idle within about a minute"},
+			[]string{"are never blocked", "always work", "set_fan_speed"}},
+		{"ordinary prepare", printerstate.StatePreparing, false, printerstate.CFSStateInPrint, []string{"cancel_print works", "every setpoint is refused"}, []string{"stop it on the printer screen"}},
+		{"busy", printerstate.StateFilamentOperation, false, printerstate.CFSStateBusy, []string{"busy", "refused until it settles"}, nil},
+		{"error", printerstate.StateIdle, false, printerstate.CFSStateError, []string{"reports an error", "printer screen or in Creality Print", "While a print is running, pause_print and cancel_print are not blocked by it"}, []string{"stay available", "always"}},
+		{"unknown", printerstate.StateIdle, false, printerstate.CFSStateUnknown, []string{"could not be fully read", "fail closed"}, nil},
+	}
+	for _, tc := range cases {
+		block := printerstate.StateBlock{ActivityState: tc.activity, CFSConnected: true, StartWindow: tc.window,
+			CFS: &printerstate.CFSBlock{State: tc.cfs, Reasons: []string{"why-" + tc.cfs}}}
+		body := statusGuidance(block)
+		for _, want := range append(append([]string(nil), tc.want...), "get_filaments", "cfs state: "+tc.cfs, "Not detectable from here", "a tool change") {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: guidance = %q, missing %q", tc.name, body, want)
+			}
+		}
+		for _, bad := range append(append([]string(nil), tc.never...), "later version", "additionally blocks") {
+			if strings.Contains(body, bad) {
+				t.Errorf("%s: guidance = %q, must not contain %q", tc.name, body, bad)
+			}
 		}
 	}
 
-	derived := printerstate.Derived{State: printerstate.StatePaused, Bucket: printerstate.BucketZ, Class: printerstate.ClassBusy, CFSConnected: true}
-	gates := policy.AvailableFor(derived, domain.DefaultSettings())
-	status := make(map[string]string, len(gates))
-	for _, g := range gates {
-		status[g.Name] = g.Status
+	// The claims agree with the policy's own gates.
+	gateStatuses := func(d printerstate.Derived) map[string]string {
+		out := map[string]string{}
+		for _, g := range policy.AvailableFor(d, domain.DefaultSettings()) {
+			out[g.Name] = g.Status
+		}
+		return out
 	}
-	if status[string(policy.ActionResumePrint)] != "blocked" {
-		t.Errorf("resume_print status = %q while CFS connected, want blocked (D5)", status[string(policy.ActionResumePrint)])
+	base := printerstate.Derived{CFSConnected: true, CFSKnown: true, CFSQuiescent: false}
+	printing := base
+	printing.State, printing.Bucket, printing.Class = printerstate.StatePrinting, printerstate.BucketP, printerstate.ClassBusy
+	g := gateStatuses(printing)
+	for _, n := range []policy.ActionName{policy.ActionSetFanSpeed, policy.ActionSetSpeedFactor, policy.ActionExcludeObject} {
+		if g[string(n)] == "blocked" {
+			t.Errorf("printing: %s blocked but the guidance says it is available", n)
+		}
 	}
-	if status[string(policy.ActionCancelPrint)] == "blocked" {
-		t.Errorf("cancel_print status = blocked while CFS connected, want available/needs_confirmation (D5: stopping must never be blocked)")
+	if g[string(policy.ActionPausePrint)] == "blocked" || g[string(policy.ActionCancelPrint)] == "blocked" {
+		t.Errorf("printing: pause or cancel blocked")
+	}
+	paused := base
+	paused.State, paused.Bucket, paused.Class = printerstate.StatePaused, printerstate.BucketZ, printerstate.ClassBusy
+	g = gateStatuses(paused)
+	for _, n := range []policy.ActionName{policy.ActionPausePrint, policy.ActionSetFanSpeed, policy.ActionSetSpeedFactor, policy.ActionSetNozzleTemperature, policy.ActionSetFlowFactor} {
+		if g[string(n)] != "blocked" {
+			t.Errorf("paused: %s = %q, the guidance says it is not available", n, g[string(n)])
+		}
+	}
+	if g[string(policy.ActionCancelPrint)] != "needs_confirmation" || g[string(policy.ActionExcludeObject)] != "needs_confirmation" {
+		t.Errorf("paused: cancel %q exclude %q", g[string(policy.ActionCancelPrint)], g[string(policy.ActionExcludeObject)])
+	}
+	if g[string(policy.ActionResumePrint)] != "blocked" {
+		t.Errorf("paused without a pause record: resume = %q, want blocked", g[string(policy.ActionResumePrint)])
+	}
+	paused.PauseRecorded = true
+	if got := gateStatuses(paused)[string(policy.ActionResumePrint)]; got != "needs_confirmation" {
+		t.Errorf("paused with a pause record: resume = %q, want needs_confirmation", got)
+	}
+	window := base
+	window.State, window.Bucket, window.Class, window.StartWindow = printerstate.StatePreparing, printerstate.BucketPP, printerstate.ClassBusy, true
+	g = gateStatuses(window)
+	if g[string(policy.ActionCancelPrint)] != "needs_confirmation" || g[string(policy.ActionSetNozzleTemperature)] != "blocked" {
+		t.Errorf("start window: cancel %q nozzle %q, want cancel offered (the 9999 stop is verified) and nozzle blocked", g[string(policy.ActionCancelPrint)], g[string(policy.ActionSetNozzleTemperature)])
 	}
 }
 
-// An idle printer with the CFS connected must never be called "safe to
-// start" or steered to start_print in the same reply whose actions list
-// blocks start_print (D5).
-func TestStatusGuidanceIdleWithCFSDoesNotOfferStart(t *testing.T) {
+// An idle printer with the CFS connected is steered to start_print as the
+// two-step mapping proposal only when the CFS is idle; a busy, error or unknown
+// CFS says start_print is refused instead. The filament_operation state has its
+// own wording instead of the v0.1.0 "cannot safely act" text.
+func TestStatusGuidanceIdleWithCFSExplainsTheMappingProposal(t *testing.T) {
 	for _, state := range []string{printerstate.StateIdle, printerstate.StateComplete, printerstate.StateCancelled} {
-		body := statusGuidance(printerstate.StateBlock{ActivityState: state, CFSConnected: true})
-		if strings.Contains(body, "safe to start") || strings.Contains(body, string(policy.ActionStartPrint)) {
-			t.Errorf("statusGuidance(%s, CFS connected) = %q, must not offer starting a job", state, body)
+		body := statusGuidance(printerstate.StateBlock{ActivityState: state, CFSConnected: true,
+			CFS: &printerstate.CFSBlock{State: printerstate.CFSStateIdle}})
+		if strings.Contains(body, "safe to start") {
+			t.Errorf("statusGuidance(%s, CFS connected) = %q, must not call the printer safe to start", state, body)
 		}
-		if !strings.Contains(body, "CFS unit reports connected") {
-			t.Errorf("statusGuidance(%s, CFS connected) = %q, missing the CFS note explaining why", state, body)
+		for _, want := range []string{string(policy.ActionStartPrint), "two-step mapping proposal"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("statusGuidance(%s, CFS connected) = %q, missing %q", state, body, want)
+			}
 		}
+		for _, cfs := range []string{printerstate.CFSStateBusy, printerstate.CFSStateError, printerstate.CFSStateUnknown} {
+			body := statusGuidance(printerstate.StateBlock{ActivityState: state, CFSConnected: true, CFS: &printerstate.CFSBlock{State: cfs}})
+			if !strings.Contains(body, "not ready for a start") || strings.Contains(body, "then start_print") {
+				t.Errorf("statusGuidance(%s, cfs %s) = %q, want the not-ready wording without steering to start_print", state, cfs, body)
+			}
+		}
+	}
+	for _, state := range []string{printerstate.StateFilamentOperation, printerstate.StateCFSOperation} {
+		body := statusGuidance(printerstate.StateBlock{ActivityState: state, CFSConnected: true,
+			CFS: &printerstate.CFSBlock{State: printerstate.CFSStateBusy}})
+		for _, want := range []string{"moving filament", "printer screen", "get_filaments"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("statusGuidance(%s) = %q, missing %q", state, body, want)
+			}
+		}
+		if strings.Contains(body, "cannot safely act around yet") {
+			t.Errorf("statusGuidance(%s) kept the generic unknown-state text: %q", state, body)
+		}
+	}
+	window := statusGuidance(printerstate.StateBlock{ActivityState: printerstate.StatePreparing, StartWindow: true})
+	if !strings.Contains(window, "self-test") || !strings.Contains(window, "cancel_print is available and sends Creality's own stop") || !strings.Contains(window, "set_light") {
+		t.Errorf("start window guidance = %q", window)
+	}
+	ordinary := statusGuidance(printerstate.StateBlock{ActivityState: printerstate.StatePreparing})
+	if strings.Contains(ordinary, "Creality's own stop") || !strings.Contains(ordinary, "set_light and cancel_print") {
+		t.Errorf("ordinary preparing guidance = %q", ordinary)
 	}
 }
 
@@ -611,7 +703,7 @@ func TestListConsoleMessagesHappyPathNewestFirst(t *testing.T) {
 	}
 	text := strings.Join(texts(res), "\n")
 	for _, want := range []string{
-		"page: 1", "total: 20", "requested_count: 20", "fetched_count: 20",
+		"page: 1", "total: 2", "requested_count: 20", "fetched_count: 20",
 		"end_temp!",
 	} {
 		if !strings.Contains(text, want) {
@@ -630,8 +722,11 @@ func TestListConsoleMessagesHappyPathNewestFirst(t *testing.T) {
 		t.Fatalf("list_console_messages reply missing its message table:\n%s", text)
 	}
 	body := text[tableStart:]
+	// The 19 periodic "// cur_temp = N" reports collapse into one line (supervised
+	// session 2026-09-29); newest first, "end_temp!" precedes it, and the latest
+	// report of the run is named.
 	endIdx := strings.Index(body, "end_temp!")
-	firstIdx := strings.Index(body, "cur_temp = 44.0")
+	firstIdx := strings.Index(body, "(19 temperature reports, latest: // cur_temp = 40.05)")
 	if endIdx == -1 || firstIdx == -1 || endIdx > firstIdx {
 		t.Fatalf("list_console_messages did not reverse to newest-first:\n%s", text)
 	}
@@ -671,4 +766,53 @@ func TestListConsoleMessagesNotFoundPrinter(t *testing.T) {
 	if !res.IsError || !strings.Contains(text, "code: not_found") {
 		t.Fatalf("list_console_messages not_found reply = %s", text)
 	}
+}
+
+// The resuming guidance says who started it (final review m4), and pausing has
+// its own text.
+func TestStatusGuidanceResumingAndPausing(t *testing.T) {
+	printer := statusGuidance(printerstate.StateBlock{ActivityState: printerstate.StateResuming,
+		Reasons: []string{"9999 state is 8 (the RESUME routine: reheat, purge, wipe) while print_stats is still paused"}})
+	if !strings.Contains(printer, "The printer reports it is resuming") || strings.Contains(printer, "this server sent") || !strings.Contains(printer, "cancel_print is available meanwhile") {
+		t.Errorf("printer-reported resume: %q", printer)
+	}
+	ours := statusGuidance(printerstate.StateBlock{ActivityState: printerstate.StateResuming,
+		Reasons: []string{"a resume this server sent at 2026-09-29T01:00:00Z has not finished"}})
+	if !strings.Contains(ours, "A resume this server sent is running") {
+		t.Errorf("this server's resume: %q", ours)
+	}
+	pausing := statusGuidance(printerstate.StateBlock{ActivityState: printerstate.StatePausing})
+	if !strings.Contains(pausing, "PAUSE routine") || !strings.Contains(pausing, "cancel_print is available") {
+		t.Errorf("pausing: %q", pausing)
+	}
+	if strings.Contains(statusGuidance(printerstate.StateBlock{ActivityState: printerstate.StateCancelling}), "resume") {
+		t.Error("cancelling guidance mentions resume")
+	}
+}
+
+func TestControlBodyForPausing(t *testing.T) {
+	body := controlBody(policy.Result{Action: policy.ActionPausePrint, Printer: domain.Printer{Name: "K2"}, Accepted: true, Effect: "pausing"})
+	if !strings.Contains(body, "is pausing") || !strings.Contains(body, "will report paused shortly") {
+		t.Errorf("pausing body: %s", body)
+	}
+}
+
+func TestConsoleToolDescriptionNotesTheCollapseScope(t *testing.T) {
+	deps, _ := singlePrinterDeps(t, domain.PresetMonitor, nil)
+	cs := testSession(t, deps)
+	list, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range list.Tools {
+		if tool.Name == "list_console_messages" {
+			for _, want := range []string{"temperature reports", "within the fetched window only", "every other line is kept"} {
+				if !strings.Contains(tool.Description, want) {
+					t.Errorf("description missing %q", want)
+				}
+			}
+			return
+		}
+	}
+	t.Fatal("list_console_messages not registered")
 }

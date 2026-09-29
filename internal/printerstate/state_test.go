@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
 func boolPtr(b bool) *bool        { return &b }
@@ -100,20 +100,21 @@ func TestDeriveActivityState_RealCancelledCapture(t *testing.T) {
 	}
 }
 
-// TestDeriveActivityState_AllNineteenStates exercises one synthetic Snapshot
-// per row of references/analysis/11-state-model.md section 1.1, asserting
-// the exact display state, bucket and gating class each one produces. This
-// also doubles as the "one bucket per state" pinning test except for
-// "error", whose two buckets are asserted explicitly by name.
-func TestDeriveActivityState_AllNineteenStates(t *testing.T) {
-	tests := []struct {
-		name    string
-		snap    func() Snapshot
-		pending *PendingAction
-		state   string
-		bucket  Bucket
-		class   GatingClass
-	}{
+// stateCase is one row of the state table: a snapshot builder, an optional
+// pending action and the expected state/bucket/class. It is shared by the
+// derivation test and by the CFS-flags-on-every-return-path test.
+type stateCase struct {
+	name    string
+	snap    func() Snapshot
+	pending *PendingAction
+	state   string
+	bucket  Bucket
+	class   GatingClass
+}
+
+// stateTable is the table of synthetic rows (see the derivation test below).
+func stateTable() []stateCase {
+	return []stateCase{
 		{
 			name: "row1 offline",
 			snap: func() Snapshot {
@@ -359,6 +360,16 @@ func TestDeriveActivityState_AllNineteenStates(t *testing.T) {
 			state: StateUnknown, bucket: BucketU, class: ClassUnknownFailClosed,
 		},
 	}
+}
+
+// TestDeriveActivityState_AllNineteenStates exercises one synthetic Snapshot
+// per row of references/analysis/11-state-model.md section 1.1, asserting
+// the exact display state, bucket and gating class each one produces. This
+// also doubles as the "one bucket per state" pinning test except for
+// "error", whose two buckets are asserted explicitly by name.
+
+func TestDeriveActivityState_AllNineteenStates(t *testing.T) {
+	tests := stateTable()
 
 	seenBucket := map[string]Bucket{}
 	for _, tc := range tests {
@@ -546,7 +557,7 @@ func TestDeriveActivityState_FailClosedOnMissingFields(t *testing.T) {
 	}
 }
 
-// TestCFSConnectedMidPrint pins safety-architecture.md D5: while the CFS
+// TestCFSConnectedMidPrint pins the rule that survives from safety-architecture.md D5: while the CFS
 // reports connected, the bucket must stay whatever printing/paused naturally
 // derive to (P/Z), not collapse to U, because pause and cancel of a running
 // print must stay reachable. internal/policy is responsible for combining

@@ -3,12 +3,13 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // errBoom is a fixed error TestWatchdog_Expiry_RecordsTurnOffFailure uses
@@ -194,6 +195,8 @@ func TestWatchdog_Expiry_TurnsOffWhenStillIdleAndTargetUnchanged(t *testing.T) {
 	}
 
 	waitFor(t, time.Second, func() bool { return send.count() == 1 })
+	// settle runs just after the send; wait for it rather than race it.
+	waitFor(t, time.Second, func() bool { s := w.Status("printer-a"); return len(s) == 1 && !s[0].Armed })
 
 	status := w.Status("printer-a")
 	if len(status) != 1 || status[0].Armed {
@@ -434,4 +437,216 @@ func TestWatchdog_Expiry_RecordsTurnOffFailure(t *testing.T) {
 
 	waitFor(t, time.Second, func() bool { return send.count() == 1 })
 	waitFor(t, time.Second, func() bool { return len(w.Status("printer-h")) == 1 && w.Status("printer-h")[0].LastAction != "" })
+}
+
+// --- CFS deferral (plan V8, 2.6, 8a.8) ---
+
+// cfsBusyIdle is an idle snapshot with a connected CFS that is not
+// quiescent (a feed in progress).
+func cfsBusyIdle(targetC float64) (printerstate.Snapshot, printerstate.Derived) {
+	snap, derived := idleSnapshot(targetC)
+	derived.CFSConnected = true
+	derived.CFSKnown = true
+	derived.CFSQuiescent = false
+	derived.CFSReasons = []string{"cfs busy: 9999 feedState is 2, not one of 0, 3, 14, 100"}
+	return snap, derived
+}
+
+func cfsQuiescentIdle(targetC float64) (printerstate.Snapshot, printerstate.Derived) {
+	snap, derived := idleSnapshot(targetC)
+	derived.CFSConnected = true
+	derived.CFSKnown = true
+	derived.CFSQuiescent = true
+	return snap, derived
+}
+
+func newCFSTestWatchdog(state DirectStateSource, send DirectTemplateSender) *Watchdog {
+	w := newTestWatchdog(state, send)
+	w.cfsRecheck = 10 * time.Millisecond
+	return w
+}
+
+func lastAction(w *Watchdog, identity string) string {
+	s := w.Status(identity)
+	if len(s) != 1 {
+		return ""
+	}
+	return s[0].LastAction
+}
+
+// Busy at expiry: the watchdog defers (still armed, status says why), and
+// once the CFS is quiescent the next re-check turns the heater off.
+func TestWatchdog_CFSBusyDefersThenTurnsOffWhenQuiescent(t *testing.T) {
+	snap, derived := cfsBusyIdle(200)
+	state := newFakeStateSource()
+	state.set("printer-cfs1", snapshotEntry{snap: snap, derived: derived, ok: true})
+	send := newFakeSender()
+	w := newCFSTestWatchdog(state, send)
+
+	if err := w.Arm(ArmRequest{Identity: "printer-cfs1", Heater: "extruder", TargetC: 200, ArmMinutes: 1, Host: "printer-cfs1", MoonrakerPort: 7125}); err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+
+	waitFor(t, time.Second, func() bool { return strings.HasPrefix(lastAction(w, "printer-cfs1"), "deferred: CFS busy: ") })
+	if !strings.Contains(lastAction(w, "printer-cfs1"), "feedState is 2") {
+		t.Errorf("deferred status = %q, want the CFS reasons", lastAction(w, "printer-cfs1"))
+	}
+	if !w.Status("printer-cfs1")[0].Armed || w.ArmedCount() != 1 {
+		t.Fatal("a deferred watchdog must stay armed")
+	}
+	if send.count() != 0 {
+		t.Fatalf("TurnOff called %d times while the CFS was busy", send.count())
+	}
+
+	snap2, derived2 := cfsQuiescentIdle(200)
+	state.set("printer-cfs1", snapshotEntry{snap: snap2, derived: derived2, ok: true})
+	waitFor(t, time.Second, func() bool { return send.count() == 1 })
+	waitFor(t, time.Second, func() bool { return !w.Status("printer-cfs1")[0].Armed })
+}
+
+// The signal-fed filament_operation state (bucket U) defers as well.
+func TestWatchdog_FilamentOperationStateDefers(t *testing.T) {
+	snap, derived := cfsBusyIdle(200)
+	derived.State = printerstate.StateFilamentOperation
+	derived.Bucket = printerstate.BucketU
+	state := newFakeStateSource()
+	state.set("printer-cfs2", snapshotEntry{snap: snap, derived: derived, ok: true})
+	send := newFakeSender()
+	w := newCFSTestWatchdog(state, send)
+
+	if err := w.Arm(ArmRequest{Identity: "printer-cfs2", Heater: "extruder", TargetC: 200, ArmMinutes: 1, Host: "printer-cfs2", MoonrakerPort: 7125}); err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return strings.HasPrefix(lastAction(w, "printer-cfs2"), "deferred: CFS busy: ") })
+	if send.count() != 0 || !w.Status("printer-cfs2")[0].Armed {
+		t.Fatalf("filament_operation must defer: sends=%d armed=%v", send.count(), w.Status("printer-cfs2")[0].Armed)
+	}
+	w.Disarm("printer-cfs2")
+}
+
+// Busy, then the target is changed by someone else: stood down, never turned off.
+func TestWatchdog_CFSBusyThenTargetChangedStandsDown(t *testing.T) {
+	snap, derived := cfsBusyIdle(200)
+	state := newFakeStateSource()
+	state.set("printer-cfs3", snapshotEntry{snap: snap, derived: derived, ok: true})
+	send := newFakeSender()
+	w := newCFSTestWatchdog(state, send)
+
+	if err := w.Arm(ArmRequest{Identity: "printer-cfs3", Heater: "extruder", TargetC: 200, ArmMinutes: 1, Host: "printer-cfs3", MoonrakerPort: 7125}); err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return strings.HasPrefix(lastAction(w, "printer-cfs3"), "deferred") })
+
+	snap2, derived2 := cfsBusyIdle(150) // someone changed the target, CFS still busy
+	state.set("printer-cfs3", snapshotEntry{snap: snap2, derived: derived2, ok: true})
+	waitFor(t, time.Second, func() bool { return !w.Status("printer-cfs3")[0].Armed })
+	if send.count() != 0 {
+		t.Fatalf("TurnOff called %d times, want 0", send.count())
+	}
+	if !strings.Contains(lastAction(w, "printer-cfs3"), "target changed") {
+		t.Errorf("LastAction = %q, want a target-changed stand-down", lastAction(w, "printer-cfs3"))
+	}
+}
+
+// A Disarm during the deferral wait wins: the record is never re-armed.
+func TestWatchdog_DisarmDuringDeferralWins(t *testing.T) {
+	snap, derived := cfsBusyIdle(200)
+	state := newFakeStateSource()
+	state.set("printer-cfs4", snapshotEntry{snap: snap, derived: derived, ok: true})
+	send := newFakeSender()
+	w := newCFSTestWatchdog(state, send)
+	w.cfsRecheck = 40 * time.Millisecond
+
+	if err := w.Arm(ArmRequest{Identity: "printer-cfs4", Heater: "extruder", TargetC: 200, ArmMinutes: 1, Host: "printer-cfs4", MoonrakerPort: 7125}); err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return strings.HasPrefix(lastAction(w, "printer-cfs4"), "deferred") })
+	w.Disarm("printer-cfs4")
+	calls := state.directCallCount()
+
+	// Make it quiescent: had the deferral re-armed, this would turn off.
+	snap2, derived2 := cfsQuiescentIdle(200)
+	state.set("printer-cfs4", snapshotEntry{snap: snap2, derived: derived2, ok: true})
+	time.Sleep(150 * time.Millisecond)
+	if send.count() != 0 || w.ArmedCount() != 0 {
+		t.Fatalf("after Disarm: sends=%d armed=%d, want 0/0", send.count(), w.ArmedCount())
+	}
+	if state.directCallCount() != calls {
+		t.Fatal("the watchdog kept checking after Disarm")
+	}
+}
+
+// A CFS that is not quiescent while a job runs (bucket P) is a non-idle
+// stand-down as before, not a deferral: the CFS is only deferred for when it
+// is the sole thing keeping the printer from idle.
+func TestWatchdog_CFSBusyWhilePrintingStandsDown(t *testing.T) {
+	snap, derived := cfsBusyIdle(200)
+	derived.State = printerstate.StatePrinting
+	derived.Bucket = printerstate.BucketP
+	state := newFakeStateSource()
+	state.set("printer-cfs5", snapshotEntry{snap: snap, derived: derived, ok: true})
+	send := newFakeSender()
+	w := newCFSTestWatchdog(state, send)
+
+	if err := w.Arm(ArmRequest{Identity: "printer-cfs5", Heater: "extruder", TargetC: 200, ArmMinutes: 1, Host: "printer-cfs5", MoonrakerPort: 7125}); err != nil {
+		t.Fatalf("Arm: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return !w.Status("printer-cfs5")[0].Armed })
+	if send.count() != 0 || !strings.Contains(lastAction(w, "printer-cfs5"), "no longer idle") {
+		t.Fatalf("sends=%d action=%q, want a no-longer-idle stand-down", send.count(), lastAction(w, "printer-cfs5"))
+	}
+}
+
+// --- deferral is narrowed (safety review M1) ---
+
+// The bed never defers, even with a positively busy CFS: it is turned off.
+func TestWatchdog_BedNeverDefersForACFS(t *testing.T) {
+	snap, derived := cfsBusyIdle(60)
+	snap.HeaterBed = &moonraker.HeaterBed{Target: floatPtr(60)}
+	state := newFakeStateSource()
+	state.set("printer-bed1", snapshotEntry{snap: snap, derived: derived, ok: true})
+	send := newFakeSender()
+	w := newCFSTestWatchdog(state, send)
+	if err := w.Arm(ArmRequest{Identity: "printer-bed1", Heater: "heater_bed", TargetC: 60, ArmMinutes: 1, Host: "printer-bed1", MoonrakerPort: 7125}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, time.Second, func() bool { return send.count() == 1 })
+	if c, _ := send.lastCall(); c.heater != "heater_bed" {
+		t.Fatalf("turn-off = %+v", c)
+	}
+}
+
+func floatPtr(f float64) *float64 { return &f }
+
+// A CFS in error (bucket I) does not defer the bed or the nozzle: both turn off.
+func TestWatchdog_CFSErrorDoesNotDefer(t *testing.T) {
+	for _, heater := range []string{"extruder", "heater_bed"} {
+		snap, derived := idleSnapshot(200)
+		snap.HeaterBed = &moonraker.HeaterBed{Target: floatPtr(200)}
+		derived.CFSConnected, derived.CFSKnown, derived.CFSError, derived.CFSQuiescent = true, true, true, false
+		state := newFakeStateSource()
+		id := "printer-err-" + heater
+		state.set(id, snapshotEntry{snap: snap, derived: derived, ok: true})
+		send := newFakeSender()
+		w := newCFSTestWatchdog(state, send)
+		if err := w.Arm(ArmRequest{Identity: id, Heater: heater, TargetC: 200, ArmMinutes: 1, Host: id, MoonrakerPort: 7125}); err != nil {
+			t.Fatal(err)
+		}
+		waitFor(t, time.Second, func() bool { return send.count() == 1 })
+	}
+}
+
+// A CFS that is unknown (9999 unreachable) does not defer the nozzle either.
+func TestWatchdog_CFSUnknownDoesNotDeferTheNozzle(t *testing.T) {
+	snap, derived := idleSnapshot(200)
+	derived.CFSConnected, derived.CFSKnown, derived.CFSQuiescent = true, false, false
+	derived.CFSReasons = []string{"cfs unknown: port 9999 is unreachable"}
+	state := newFakeStateSource()
+	state.set("printer-unk", snapshotEntry{snap: snap, derived: derived, ok: true})
+	send := newFakeSender()
+	w := newCFSTestWatchdog(state, send)
+	if err := w.Arm(ArmRequest{Identity: "printer-unk", Heater: "extruder", TargetC: 200, ArmMinutes: 1, Host: "printer-unk", MoonrakerPort: 7125}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, time.Second, func() bool { return send.count() == 1 })
 }

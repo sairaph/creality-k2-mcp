@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // pendingKindFor maps an action to the printerstate.PendingKind its write
@@ -142,9 +142,22 @@ func (p *Policy) evaluateParams(ctx context.Context, deps Deps, printer domain.P
 		if !listedContains(files, params.Filename) {
 			return spec.Confirmation, &Error{Code: CodeNotFound, Message: "file " + params.Filename + " does not exist in the gcodes root"}
 		}
+		if derived.CFSConnected {
+			// Any CFS-connected start goes through the mapping proposal (V3).
+			return ConfirmationProposalToken, nil
+		}
 		return spec.Confirmation, nil
 
-	case ActionPausePrint, ActionCancelPrint:
+	case ActionPausePrint:
+		return spec.Confirmation, nil
+
+	case ActionCancelPrint:
+		// Cancel during the print-start self-test: print_stats has no job yet, so
+		// Moonraker's cancel is not known to stop it. Refused until the 9999
+		// stop is verified on a real printer (plan 8a.1).
+		if inStartWindow(snap, derived) && !stopDuringStartVerified {
+			return spec.Confirmation, &Error{Code: CodeUnavailable, Message: startWindowCancelRefusal}
+		}
 		return spec.Confirmation, nil
 
 	case ActionResumePrint:
@@ -178,9 +191,15 @@ func (p *Policy) evaluateParams(ctx context.Context, deps Deps, printer domain.P
 		return spec.Confirmation, checkExcludeObject(snap, params)
 
 	case ActionUploadGCodeFile:
+		if err := p.startWindowFileGuard(identity, snap, derived, params.Filename, "upload or overwrite"); err != nil {
+			return spec.Confirmation, err
+		}
 		return p.evaluateUpload(ctx, deps, spec, snap, params)
 
 	case ActionDeleteGCodeFile:
+		if err := p.startWindowFileGuard(identity, snap, derived, params.Filename, "delete"); err != nil {
+			return spec.Confirmation, err
+		}
 		return spec.Confirmation, checkDelete(snap, params)
 
 	default:
@@ -417,14 +436,27 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 
 	sendErr := dispatchSend(ctx, deps, spec.Name, params)
 	accepted := sendErr == nil
+	if spec.Name == ActionResumePrint || spec.Name == ActionCancelPrint {
+		// The pause record is single-use: once a resume or cancel was sent it
+		// must never match a later pause (plan 8a.5).
+		locks.pl.setPauseRec(nil)
+	}
 
 	afterSnap, afterDerived, confirmed := p.pollUntilSettle(ctx, deps, printer, locks, pendingKind, spec.SettleTimeout, settleFuncFor(spec.Name, params))
+	// A cancel whose HTTP call failed with a transport error or timeout (Moonraker
+	// answers only after the macro) but whose effect the settle poll then confirmed
+	// did reach the printer: count it as accepted. Never for an HTTP status
+	// rejection, and never for the setpoint actions, whose target may already hold
+	// before the send (final review M3).
+	if spec.Name == ActionCancelPrint && confirmed && isTransportError(sendErr) {
+		accepted = true
+	}
 
 	result := Result{
 		Action:   spec.Name,
 		Accepted: accepted,
 		Effect:   effectString(confirmed),
-		Effects:  spec.Effects,
+		Effects:  withCFSNote(spec.Effects, spec.Name, derived),
 		Commands: spec.Commands,
 		Before:   before,
 		After:    printerstate.BuildStateBlock(afterSnap, afterDerived, nil),

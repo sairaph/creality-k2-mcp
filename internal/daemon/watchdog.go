@@ -8,13 +8,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // expireCheckTimeout bounds the fresh snapshot-and-send Watchdog performs
 // when a heater's deadline is reached, so an unreachable printer cannot hang
 // the expiry goroutine forever.
 const expireCheckTimeout = 10 * time.Second
+
+// cfsRecheckInterval is how long the watchdog waits before re-checking after
+// deferring an expiry because a connected CFS is busy (plan-v0.2.0.md V8, 2.6).
+// There is deliberately no overall cap on deferrals: each check is bounded by
+// expireCheckTimeout, and any other non-idle state, a changed target, an
+// identity mismatch or an unreachable printer still stands down at once.
+const cfsRecheckInterval = 30 * time.Second
 
 // StateSource takes a fresh printerstate snapshot for a printer identity by
 // resolving it against the printer registry (registryAccess.Snapshot).
@@ -102,7 +109,9 @@ type heaterRecord struct {
 // heater, target and deadline; at expiry it takes a fresh snapshot and
 // sends the turn-off command only if the printer is still idle (bucket I)
 // and the heater's current target still equals the armed target, standing
-// down and recording why otherwise. Disarm cancels immediately. Every
+// down and recording why otherwise. A connected CFS that is busy (or the
+// signal-fed filament_operation state) defers the check by cfsRecheckInterval
+// instead of standing down (plan-v0.2.0.md V8). Disarm cancels immediately. Every
 // method is safe for concurrent use.
 type Watchdog struct {
 	mu        sync.Mutex
@@ -116,6 +125,9 @@ type Watchdog struct {
 	// leaves this at time.Minute; tests shrink it so expiry does not need a
 	// real multi-minute sleep.
 	minute time.Duration
+
+	// cfsRecheck is cfsRecheckInterval; tests shrink it.
+	cfsRecheck time.Duration
 }
 
 // NewWatchdog builds a Watchdog backed by direct and directSend, both of
@@ -129,6 +141,7 @@ func NewWatchdog(direct DirectStateSource, directSend DirectTemplateSender) *Wat
 		direct:     direct,
 		directSend: directSend,
 		minute:     time.Minute,
+		cfsRecheck: cfsRecheckInterval,
 	}
 }
 
@@ -292,6 +305,27 @@ func (w *Watchdog) expire(identity, heater string, token int64) {
 				"address may not be the one that was armed (e.g. the address was reassigned)", identity, liveHostname))
 		return
 	}
+	// CFS deferral (plan V8, 2.6, narrowed by safety review M1): a nozzle whose
+	// CFS is positively busy is a filament operation in progress, not proof that
+	// someone took over the printer, so re-check later instead of cutting the
+	// nozzle out from under a load. Nozzle only, and only for a Known, error free
+	// busy CFS (cfsDeferral); everything else, including a CFS that is unknown or
+	// in error and the bed, takes the normal checks below and is turned off. The
+	// target checks still apply first so a changed target stands down even while
+	// deferring.
+	if heater == "extruder" && cfsDeferral(derived) {
+		current, known := heaterTarget(snap, heater)
+		if !known {
+			w.settle(identity, heater, token, "stood down: current heater target is unknown; refusing to assume it is unchanged")
+			return
+		}
+		if !floatEqual(current, targetC) {
+			w.settle(identity, heater, token, fmt.Sprintf("stood down: target changed by someone else (armed for %g, now %g)", targetC, current))
+			return
+		}
+		w.deferExpiry(identity, heater, token, cfsBusyReason(derived))
+		return
+	}
 	if derived.Bucket != printerstate.BucketI {
 		reason := "printer is not idle"
 		if len(derived.Reasons) > 0 && derived.Reasons[0] != "" {
@@ -353,4 +387,57 @@ func heaterTarget(snap printerstate.Snapshot, heater string) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// cfsDeferral reports whether an expiry should be deferred rather than
+// settled. Only for the nozzle heater (the caller checks) and only when the CFS
+// is POSITIVELY busy: Known, no error, and either the signal-fed
+// filament_operation state or an idle-bucket printer whose CFS is not at rest
+// (safety review M1). A CFS that is unknown (9999 unreachable, a field missing)
+// or in error does not defer: turning a heater off at idle is the safe
+// direction, and an unknown or error state can last indefinitely. The bed never
+// defers: a CFS filament load does not need it.
+func cfsDeferral(derived printerstate.Derived) bool {
+	if !derived.CFSConnected || !derived.CFSKnown || derived.CFSError {
+		return false
+	}
+	if derived.State == printerstate.StateFilamentOperation {
+		return true
+	}
+	return derived.Bucket == printerstate.BucketI && !derived.CFSQuiescent
+}
+
+// cfsBusyReason names why the CFS is busy, for the deferred status line.
+func cfsBusyReason(derived printerstate.Derived) string {
+	if len(derived.CFSReasons) > 0 {
+		return strings.Join(derived.CFSReasons, "; ")
+	}
+	for _, r := range derived.Reasons {
+		if r != "" {
+			return r
+		}
+	}
+	return "state " + derived.State
+}
+
+// deferExpiry records the deferral and re-arms the same record's timer with
+// the same token. It checks armed and the token under the lock first, so a
+// Disarm (or a newer Arm) during the wait wins: a superseded or disarmed
+// record is never re-armed (plan 8a.8).
+func (w *Watchdog) deferExpiry(identity, heater string, token int64, reason string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	heaters, ok := w.byIdent[identity]
+	if !ok {
+		return
+	}
+	rec, ok := heaters[heater]
+	if !ok || !rec.armed || rec.token != token {
+		return
+	}
+	now := time.Now()
+	rec.lastAction = "deferred: CFS busy: " + reason
+	rec.lastActionAt = now
+	rec.deadline = now.Add(w.cfsRecheck)
+	rec.timer = time.AfterFunc(w.cfsRecheck, func() { w.expire(identity, heater, token) })
 }

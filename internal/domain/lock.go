@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// LockPath returns ~/.creality_k2_mcp/locks/<identity>.lock.
+// LockPath returns ~/.creality-k2-mcp/locks/<identity>.lock.
 //
 // identity must be the printer's resolved identity: the live Klipper
 // hostname from a fresh printer/info read, verified against the registry's

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
 // Per-step timeouts for the identification sequence (plan-v0.1.0.md

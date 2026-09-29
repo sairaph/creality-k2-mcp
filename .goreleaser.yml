@@ -1,11 +1,11 @@
 version: 2
 
-project_name: creality_k2_mcp
+project_name: creality-k2-mcp
 
 builds:
-  - id: creality_k2_mcp
+  - id: creality-k2-mcp
     main: .
-    binary: creality_k2_mcp
+    binary: creality-k2-mcp
     env: [CGO_ENABLED=0]
     goos: [darwin, linux, windows]
     goarch: [amd64, arm64]

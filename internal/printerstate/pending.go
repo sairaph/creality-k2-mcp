@@ -21,10 +21,9 @@ const (
 	// 11-state-model.md row 14's conservative rule: since no printer-reported
 	// signal reliably marks a filament-load or CFS operation as busy, a tool
 	// that starts one must hold its own client-side "just started this, treat
-	// as busy" lock until a generous, evidence-free timeout elapses. No v0.1.0
-	// tool triggers either kind (CFS tools are v0.2.0, safety-architecture.md
-	// D5), so these exist for forward compatibility and for the synthetic
-	// tests covering row 14; they are otherwise unused today.
+	// as busy" lock until a generous, evidence-free timeout elapses. Since v0.2.0
+	// set_filament_definition holds PendingCFSOperation while it runs, and the
+	// printer-reported CFS feed signals (state.go row 14) cover the rest.
 	PendingFilamentOperation PendingKind = "filament_operation"
 	PendingCFSOperation      PendingKind = "cfs_operation"
 )

@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 OWNER="sairaph"
-REPO="creality_k2_mcp"
-BIN="creality_k2_mcp"
+REPO="creality-k2-mcp"
+BIN="creality-k2-mcp"
 # Extra flags for the configure step, e.g. CONFIGURE_ARGS="--yes --all" sh install.sh
 CONFIGURE_ARGS="${CONFIGURE_ARGS:-}"
 

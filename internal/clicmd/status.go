@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 const statusUsage = "usage: status [printer] [--json]\n"
@@ -27,7 +27,7 @@ func RunStatus(ctx context.Context, deps Deps, args []string) int {
 	fs.SetOutput(io.Discard)
 	fs.Usage = func() {}
 	asJSON := fs.Bool("json", false, "print the StateBlock as JSON instead of text")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(reorderArgsFlagsFirst(args, map[string]bool{"json": true})); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			fmt.Fprint(deps.Stdout, statusUsage)
 			return 0

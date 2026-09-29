@@ -3,8 +3,9 @@ package policy
 import (
 	"context"
 
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // MoonrakerClient is everything Execute needs from a printer's Moonraker
@@ -38,13 +39,23 @@ type MoonrakerClient interface {
 }
 
 // WS9999Client is everything Execute needs from a printer's port-9999
-// connection: printerstate.WS9999Client (so Take can read it) plus SetLight,
-// the sole write this protocol offers. *crealityws.Client satisfies this
-// interface structurally.
+// connection: printerstate.WS9999Client (so Take can read it), SetLight, and
+// the CFS reads and writes of dev_docs/plan-v0.2.0.md section 3.2.
+// *crealityws.Client satisfies this interface structurally.
 type WS9999Client interface {
 	printerstate.WS9999Client
 
 	SetLight(ctx context.Context, on bool) (confirmed bool, err error)
+
+	BoxsInfo(ctx context.Context) (crealityws.BoxsInfo, error)
+	Materials(ctx context.Context) ([]crealityws.CatalogEntry, error)
+	GcodeFiles(ctx context.Context) ([]crealityws.GcodeFileInfo, error)
+	ModifyMaterial(ctx context.Context, e crealityws.MaterialEdit) (confirmedFrame *crealityws.BoxsInfo, sent bool, err error)
+	StartCFSPrint(ctx context.Context, path string, items []crealityws.ColorMatchItem, selfTest bool, verifyMap func(ctx context.Context) error) (startSent bool, err error)
+	StartSpoolPrint(ctx context.Context, path string, selfTest bool) (sent bool, err error)
+	// Stop is Creality's 9999 stop, used only to cancel during the start
+	// window and only when stopDuringStartVerified is true.
+	Stop(ctx context.Context) (sent bool, err error)
 }
 
 // Watchdog is D2's idle-heat watchdog (dev_docs/safety-architecture.md

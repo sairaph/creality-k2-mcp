@@ -70,7 +70,7 @@ type Registry struct {
 	Printers []Printer `json:"printers"`
 }
 
-// GlobalRegistryPath is ~/.creality_k2_mcp/printers.json.
+// GlobalRegistryPath is ~/.creality-k2-mcp/printers.json.
 func GlobalRegistryPath() (string, error) {
 	dir, err := baseDir()
 	if err != nil {
@@ -79,7 +79,7 @@ func GlobalRegistryPath() (string, error) {
 	return filepath.Join(dir, registryFileName), nil
 }
 
-// ProjectRegistryPath is <dir>/.creality_k2_mcp/printers.json.
+// ProjectRegistryPath is <dir>/.creality-k2-mcp/printers.json.
 func ProjectRegistryPath(dir string) string {
 	return filepath.Join(dir, appDirName, registryFileName)
 }

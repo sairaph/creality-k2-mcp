@@ -145,7 +145,7 @@ func DefaultSettings() Settings {
 	}
 }
 
-// SettingsPath is ~/.creality_k2_mcp/config.toml.
+// SettingsPath is ~/.creality-k2-mcp/config.toml.
 func SettingsPath() (string, error) {
 	dir, err := baseDir()
 	if err != nil {
