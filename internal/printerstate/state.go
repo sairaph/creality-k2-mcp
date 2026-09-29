@@ -101,6 +101,32 @@ func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 			"9999 state is 8 (the RESUME routine: reheat, purge, wipe) while print_stats is still paused")
 	}
 
+	// Start window over the self-test's own motion (live bug, supervised print
+	// 2026-09-29): the self-test after a CFS start homes and probes the bed with
+	// print_stats still at the previous job's complete (or standby, or cancelled).
+	// Without this the homing and calibrating rows below would win and take cancel
+	// away ("not available in state homing") although the verified start-window
+	// stop exists. So when the start-window signal holds, homing and calibrating
+	// derive as the start window (preparing, bucket PP: cancel allowed, every other
+	// write refused), with the reason naming the motion. liveStartSignal (the
+	// self-test progress or 9999 state 1, 9 or 7 with standby; a stale-able
+	// non-identity map alone does not count) never fires for printing, paused or error, so a RESUME that homes, a running print
+	// and a genuine homing or calibration outside a start window are unchanged.
+	if ok, reason := liveStartSignal(snap); ok {
+		if h, hr := isHoming(snap); h {
+			reason += "; self-test homing (" + hr + ")"
+		} else if c, cr := isCalibrating(snap); c {
+			reason += "; self-test calibrating (" + cr + ")"
+		} else {
+			reason = ""
+		}
+		if reason != "" {
+			d := busy(StatePreparing, BucketPP, cfsOK, reason, cfsReason)
+			d.StartWindow = true
+			return d
+		}
+	}
+
 	// Row 4: homing.
 	if ok, reason := isHoming(snap); ok {
 		return busy(StateHoming, BucketB, cfsOK, reason, cfsReason)

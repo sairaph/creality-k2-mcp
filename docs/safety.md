@@ -210,6 +210,29 @@ their range and sets the speed factor to 50%.
   (a firmware restart or a power cycle clears it; this server cannot, because Silent's
   exit does nothing outside a print). `get_printer_status` and the `start_print` proposal
   and result warn about it; it is a warning, not a refusal.
+- **Across a CFS filament change** (verified in a supervised print): the swap macro runs `M220 S100`, so
+  the speed factor returns to 100% while Silent stays on, with its acceleration clamp still in force
+  (the swap sets acceleration 1000, inside the clamp, then 2500); velocity stays 150 unless the file sets
+  it; the part fan goes to 100% during the purge (Silent does not cap it) and the nozzle goes to 265 then
+  270 C for the flush. The state block then shows `speed_preset: silent` with a note that the factor is
+  not 50%.
+- **Queued writes.** Moonraker runs G-code in order, so a write sent during a purge or filament change
+  can wait behind it. A write that errors without an HTTP answer (a timeout) is treated as sent and
+  possibly queued: it is never retried (a live run showed two timed-out M220s both running later), and
+  the settle read decides. If the read shows the target, the result is `confirmed`, and it is also
+  `accepted` with a note that the printer was busy and ran the command when it got to it ONLY when the
+  read is evidence that this command ran: the target did not already hold before the send and, for
+  `set_speed_preset`, Silent's own exit (which restores the factor it saved on entry) does not explain
+  it. Otherwise it stays `confirmed` with `accepted` false and the note "the printer shows the requested
+  state; whether this command itself ran is not known". If the target is not seen it is `unconfirmed` and
+  says the command may still be queued behind a running macro, and the server remembers that write per
+  printer: while it may still be queued (until a read shows its target, the job state changes, or 5
+  minutes pass) a later call for the same setting never takes the `no_change` shortcut, sends anyway
+  (Klipper runs queued commands in order, so the newest wins) and says an earlier write may still be
+  ahead of it. Only errors after a request may have gone out count as possibly queued (a response
+  timeout, EOF, a reset, a cancellation); a definite HTTP error answer, invalid input, request build
+  errors and dial failures (connection refused, no such host, a connect timeout) sent nothing and keep
+  the one retry of the speed preset's factor.
 - **Fans.** While Silent is on the firmware caps every fan at half its range, so
   `set_fan_speed` above 50% is applied as 50% and its result says so.
 - **Stopping is never blocked by a setpoint.** `pause_print` and the confirming
@@ -315,6 +338,18 @@ Why:
   agrees.
 
 ### The start window
+
+The self-test homes the printer and probes the bed. While the start window holds (the
+signals below, or this server's own record, with print_stats not printing or paused),
+that motion does not turn the state into `homing` or `calibrating`: it stays `preparing`
+(the reason names the self-test's homing or calibrating) so `cancel_print` remains
+available and every other write stays refused. A homing or calibration outside a start
+window, a running print and a RESUME that homes are unchanged. This server's own record
+is preferred; from the signals alone only the live ones count for motion (the self-test
+progress, or 9999 state 1, 9 or 7 with standby). A filament map that is not the identity
+map can be left over from an aborted print, so on its own it still says `preparing` for
+an otherwise idle printer but never relabels a genuine homing or calibration as the
+self-test's.
 
 After a start frame the printer runs a self-test of several minutes with the job
 still reported as standby (or as the previous job's complete or cancelled). Without

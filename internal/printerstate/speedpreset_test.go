@@ -1,6 +1,7 @@
 package printerstate
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
@@ -171,5 +172,42 @@ func TestStateBlockShowsToolheadVelocityAsInformationOnly(t *testing.T) {
 	snap.Toolhead.MaxVelocity = 800 // a file that sets its own velocity overrides 150
 	if got := SpeedPresetOf(snap, Derived{Bucket: BucketP, Qmode: QmodeOn}); got != PresetSilent {
 		t.Fatalf("Silent must not depend on the velocity: %q", got)
+	}
+}
+
+// A CFS filament change runs M220 S100 while Silent stays on: speed_preset stays
+// silent, and the block says the factor differs.
+func TestStateBlockSaysWhenSilentRunsAtAnotherFactor(t *testing.T) {
+	snap := snapWith(f64(1), f64(1), f64(1.0))
+	block := BuildStateBlock(snap, Derived{Bucket: BucketP, Qmode: QmodeOn}, nil)
+	if block.SpeedPreset != PresetSilent {
+		t.Fatalf("preset = %q, want silent (the flag decides)", block.SpeedPreset)
+	}
+	want := "Silent's limits are active but the speed factor is 100% (a CFS filament change or another client changed it)"
+	if block.SpeedPresetNote != want {
+		t.Fatalf("note = %q, want %q", block.SpeedPresetNote, want)
+	}
+	// At 50% there is nothing to say; Silent off never gets the note.
+	if b := BuildStateBlock(snapWith(f64(1), f64(1), f64(0.5)), Derived{Bucket: BucketP, Qmode: QmodeOn}, nil); b.SpeedPresetNote != "" {
+		t.Errorf("note at 50%%: %q", b.SpeedPresetNote)
+	}
+	if b := BuildStateBlock(snapWith(f64(0), f64(0), f64(1.0)), Derived{Bucket: BucketP, Qmode: QmodeOff}, nil); b.SpeedPresetNote != "" {
+		t.Errorf("note with Silent off: %q", b.SpeedPresetNote)
+	}
+}
+
+// R3 through the snapshot: an unreadable Qmode speed_factor leaves the flag
+// intact, so Silent still reads on.
+func TestSnapshotQmodeFlagSurvivesAnUnreadableSavedFactor(t *testing.T) {
+	var s Snapshot
+	s.decodeObjects(map[string]json.RawMessage{
+		"custom_macro":      json.RawMessage(`{"qmode_flag":1}`),
+		"gcode_macro Qmode": json.RawMessage(`{"flag":1,"speed_factor":"oops"}`),
+	})
+	if s.QmodeMacro == nil || s.QmodeMacro.Flag == nil || s.QmodeMacro.SpeedFactor != nil {
+		t.Fatalf("macro = %+v, decode errors %v", s.QmodeMacro, s.DecodeErrs)
+	}
+	if got := qmodeFor(s); got != QmodeOn {
+		t.Fatalf("qmodeFor = %v, want on", got)
 	}
 }

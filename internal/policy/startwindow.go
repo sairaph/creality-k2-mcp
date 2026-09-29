@@ -185,16 +185,28 @@ func applyStartWindow(derived printerstate.Derived, snap printerstate.Snapshot, 
 	if rec == nil || snap.PrintStats == nil {
 		return derived
 	}
-	// Bucket I, busy_command, and filament_operation (bucket U: the CFS feeding
-	// during the window must not take cancel away from the window, safety review
-	// m3).
-	if derived.Bucket != printerstate.BucketI && derived.State != printerstate.StateBusyCommand && derived.State != printerstate.StateFilamentOperation {
+	// Bucket I, busy_command, filament_operation (bucket U: the CFS feeding during
+	// the window must not take cancel away from the window, safety review m3), and
+	// the self-test's own homing and calibrating (bucket B: they must not take cancel
+	// away either; live bug, supervised print 2026-09-29).
+	switch {
+	case derived.Bucket == printerstate.BucketI,
+		derived.State == printerstate.StateBusyCommand, derived.State == printerstate.StateFilamentOperation,
+		derived.State == printerstate.StateHoming, derived.State == printerstate.StateCalibrating:
+	default:
 		return derived
 	}
 	switch snap.PrintStats.State {
 	case "standby", "complete", "cancelled":
 	default:
 		return derived
+	}
+	motion := ""
+	switch derived.State {
+	case printerstate.StateHoming:
+		motion = "; self-test homing"
+	case printerstate.StateCalibrating:
+		motion = "; self-test calibrating"
 	}
 	out := derived
 	out.State = printerstate.StatePreparing
@@ -203,7 +215,7 @@ func applyStartWindow(derived printerstate.Derived, snap printerstate.Snapshot, 
 	out.StartWindow = true
 	out.Reasons = append([]string{fmt.Sprintf(
 		"a print start of %s was sent at %s and has not yet shown as printing (the self-test runs with print_stats still %s)",
-		rec.filename, rec.issuedAt.Format(time.RFC3339), snap.PrintStats.State)}, derived.Reasons...)
+		rec.filename, rec.issuedAt.Format(time.RFC3339), snap.PrintStats.State) + motion}, derived.Reasons...)
 	return out
 }
 

@@ -164,6 +164,22 @@ func cfsSignalOperation(snap Snapshot, cfsOK bool) (bool, string) {
 // paused, error and everything else are never considered, so this never
 // shadows them.
 func startWindowSignal(snap Snapshot) (bool, string) {
+	return startSignal(snap, true)
+}
+
+// liveStartSignal is startWindowSignal without the filament-map signal. The
+// self-test progress (withSelfTest not 100) and 9999 state 1, 9 or 7 with standby
+// are live: they exist only while a start or its stop is running. A non-identity
+// box.map can be left over (an aborted print that never wrote identity back), so on
+// its own it is a stale signal: it may still say "preparing" for an otherwise idle
+// printer, but it must never relabel a genuine homing or calibration as the
+// self-test's own. This server's own start record (the policy layer) is preferred
+// over any signal and is not subject to this.
+func liveStartSignal(snap Snapshot) (bool, string) {
+	return startSignal(snap, false)
+}
+
+func startSignal(snap Snapshot, withMap bool) (bool, string) {
 	if snap.PrintStats == nil {
 		return false, ""
 	}
@@ -187,7 +203,7 @@ func startWindowSignal(snap Snapshot) (bool, string) {
 
 		return true, fmt.Sprintf("print_stats.state is %s while 9999 withSelfTest is %d, not 100 (a print start's self-test is running)", prev, st.Value)
 	}
-	if snap.Box != nil {
+	if withMap && snap.Box != nil {
 		keys := make([]string, 0, len(snap.Box.Map))
 		for k := range snap.Box.Map {
 			keys = append(keys, k)

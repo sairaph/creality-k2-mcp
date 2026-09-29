@@ -45,9 +45,10 @@ func (p *Policy) sendStartPrint(ctx context.Context, deps Deps, printer domain.P
 	p.setUploading(identity, params.Filename, false) // start implies the upload, if any, is done
 
 	var commands []string
-	var sendErr error
+	var sendErr, resetErr error
 	if needsReset {
 		sendErr = deps.Moonraker.RunTemplate(ctx, moonraker.TemplateM221, map[string]string{"percent": "100"})
+		resetErr = sendErr
 		commands = append(commands, "M221 S100")
 	}
 	if sendErr == nil {
@@ -73,14 +74,23 @@ func (p *Policy) sendStartPrint(ctx context.Context, deps Deps, printer domain.P
 		Job:      printerstate.JobIdentityFrom(afterSnap),
 	}
 
+	if deliveryUnknown(resetErr) {
+		result.Effects = append(append([]string(nil), result.Effects...), "the M221 flow reset got no answer and was not retried: "+queuedPendingNote+". The print was not started, and the flow restore below is sent behind the reset, so the flow factor should end at its previous value")
+	}
+
 	// D7: restore the previous flow factor if the print did not reach
 	// printing. Best-effort: if the restore call itself fails, the caller
 	// still sees Effect "unconfirmed" and can act on it (P6); a failed
 	// restore never turns into a fabricated success.
 	if !confirmed && needsReset {
 		restoreErr := deps.Moonraker.RunTemplate(ctx, moonraker.TemplateM221, map[string]string{"percent": strconv.Itoa(int(*prevFlowPercent))})
-		if restoreErr == nil {
+		switch {
+		case restoreErr == nil:
 			result.StartPrintFlowRestored = prevFlowPercent
+		case deliveryUnknown(restoreErr):
+			result.Effects = append(append([]string(nil), result.Effects...), "the flow factor restore got no answer and was not retried: it may be queued behind a running macro and run when the printer gets to it; check get_printer_status")
+		default:
+			result.Effects = append(append([]string(nil), result.Effects...), "the flow factor could NOT be restored: Moonraker rejected the request; set it back on the printer if you need it")
 		}
 	}
 

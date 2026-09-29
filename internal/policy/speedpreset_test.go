@@ -240,7 +240,7 @@ func TestSpeedPreset_CFSRule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("healthy CFS: %v", err)
 	}
-	if !hasEffect(res, "filament-change G-code may override speed and acceleration during a swap") {
+	if !hasEffect(res, "a filament change runs M220 S100") || hasEffect(res, "unverified") {
 		t.Errorf("no CFS swap note: %v", res.Effects)
 	}
 	f.setCFSErr(4)

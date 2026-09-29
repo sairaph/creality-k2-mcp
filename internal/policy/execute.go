@@ -519,7 +519,7 @@ func (p *Policy) preemptedResult(ctx context.Context, deps Deps, printer domain.
 		// interrupted, or no write at all, is not accepted.
 		Accepted: res.Accepted && len(res.Commands) > 0,
 		Effect:   "preempted",
-		Effects:  append(append([]string(nil), res.Effects...), "pause_print or cancel_print took the printer lock while this action was in flight, so it was stopped; the state below is a fresh read taken after the interruption"),
+		Effects:  append(append([]string(nil), res.Effects...), "pause_print or cancel_print took the printer lock while this action was in flight, so it was stopped; a write it had already sent may still have been queued and can run later; the state below is a fresh read taken after the interruption"),
 		Commands: res.Commands,
 		Before:   res.Before,
 		After:    printerstate.BuildStateBlock(fresh, derived, nil),

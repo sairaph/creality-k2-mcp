@@ -163,7 +163,10 @@ func registerControlTools(s *Server) {
 			"the speed factor could not be set, and stuck_silent_possible if Silent is on while the job is neither printing nor paused (it ended, was cancelled or errored; a paused print keeps its real outcome). speed_preset in every " +
 			"state block (while printing or paused) shows the current preset. While Silent is on set_speed_factor is refused: use " +
 			"this tool. Related: get_printer_status, set_speed_factor. With a CFS connected it needs the CFS to read clean with no " +
-			"error, and the CFS's own filament-change G-code may override speed and acceleration during a swap.",
+			"error. Across a CFS filament change (verified live): the swap runs M220 S100, so the speed factor returns to 100% while Silent stays on " +
+			"(the result and speed_preset then say Silent's limits are active at another factor), Silent's acceleration clamp stays in force, velocity stays 150 unless the " +
+			"file sets it, the part fan goes to 100% during the purge (Silent does not cap it) and the nozzle goes to 265 then 270 C for the flush. A write that times out " +
+			"behind a running macro (a purge) is never retried: the printer runs it when it gets to it, and the result says so or says it may still be queued.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true},
 		InputSchema: withEnum(inputSchema[setSpeedPresetInput](), "preset", "silent", "stable", "standard", "ultrafast"),
 	}, setSpeedPresetHandler(s))
@@ -441,7 +444,7 @@ func controlBody(res policy.Result) string {
 		if len(res.Commands) == 0 {
 			fmt.Fprintf(&b, "%s was interrupted: pause_print or cancel_print took the printer lock before it sent anything, so nothing was sent. The state block shows what the printer reports now.", res.Action)
 		} else {
-			fmt.Fprintf(&b, "%s was interrupted: pause_print or cancel_print took the printer lock while it was in flight, so it was stopped before it finished. What reached the printer is not known: the state block is a fresh read of what it reports now, and get_printer_status shows it again.", res.Action)
+			fmt.Fprintf(&b, "%s was interrupted: pause_print or cancel_print took the printer lock while it was in flight, so it was stopped before it finished. A write it had already sent may still have been queued and can run later, and what reached the printer is not known: the state block is a fresh read of what it reports now, and get_printer_status shows it again.", res.Action)
 		}
 		appendEffects(&b, res.Effects)
 		return b.String()

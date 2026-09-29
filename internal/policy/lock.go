@@ -60,8 +60,11 @@ type printerLock struct {
 	// waits, a non-pre-empting caller cannot take it (they get the normal
 	// conflict), so a queued setpoint can never win the lock ahead of a stop.
 	preemptWaiters int
-	preempted      bool
-	silentRec      *silentRecord
+
+	// queued is the newest possibly-queued template write (queued.go), guarded by pendingMu.
+	queued    *queuedWrite
+	preempted bool
+	silentRec *silentRecord
 }
 
 func (l *printerLock) setPending(p *printerstate.PendingAction) {

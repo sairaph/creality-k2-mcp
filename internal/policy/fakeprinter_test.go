@@ -110,6 +110,21 @@ type fakePrinter struct {
 	// flight until its context is cancelled. ws9999SpeedMode and
 	// ws9999FeedratePct override what 9999 reports (nil = consistent with the
 	// state), ws9999OmitSpeed drops both.
+	// homing and leveling simulate the self-test's own motion (motor_control.is_homing,
+	// custom_macro.leveling_calibration).
+	// timeoutApplied makes every setpoint template take effect and then return a
+	// deadline error (Moonraker queued it behind a macro and it ran, but the answer
+	// never came); timeoutLost returns the deadline error without ever applying it.
+	timeoutApplied, timeoutLost bool
+	// timeoutLostAfter makes every template after that many calls time out unapplied;
+	// refusedTemplate fails with a dial error (nothing sent, Status 0); http500Template
+	// answers with a definite HTTP 500; omitSavedFactor hides Qmode's saved factor.
+	timeoutLostAfter                 int
+	refusedTemplate, http500Template bool
+	omitSavedFactor                  bool
+	homing                           bool
+	leveling                         int
+
 	silent, qmodeOmit, qmodeMismatch bool
 	savedFactor                      float64
 	speedFrames                      []bool
@@ -351,7 +366,7 @@ func (f *fakePrinter) rawObjects() map[string]any {
 				"metadata": map[string]any{"uuid": f.jobUUID},
 			},
 		},
-		"motor_control":   map[string]any{"is_homing": false},
+		"motor_control":   map[string]any{"is_homing": f.homing},
 		"toolhead":        map[string]any{"homed_axes": f.homedAxes},
 		"exclude_object":  map[string]any{"objects": f.objects, "excluded_objects": f.excluded},
 		"display_status":  map[string]any{},
@@ -565,7 +580,7 @@ func (f *fakePrinter) PrintCancel(ctx context.Context) error {
 	return nil
 }
 
-func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, args map[string]string) error {
+func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, args map[string]string) (err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.templateCalls++
@@ -579,6 +594,20 @@ func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, arg
 	}
 	if f.failTemplate {
 		return errFakeUnreachable
+	}
+	// The production shape of a response timeout: *moonraker.Error with Status 0.
+	timeoutErr := &moonraker.Error{Op: "RunTemplate", Code: moonraker.CodeUnavailable, Body: "Post \"http://printer/printer/gcode/script\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"}
+	if f.refusedTemplate {
+		return &moonraker.Error{Op: "RunTemplate", Code: moonraker.CodeUnavailable, Body: "dial tcp 127.0.0.1:7125: connect: connection refused"}
+	}
+	if f.http500Template {
+		return &moonraker.Error{Op: "RunTemplate", Status: 500, Code: moonraker.CodeInternal, Body: "Internal Server Error"}
+	}
+	if f.timeoutLost || (f.timeoutLostAfter > 0 && f.templateCalls > f.timeoutLostAfter) {
+		return timeoutErr
+	}
+	if f.timeoutApplied {
+		defer func() { err = timeoutErr }()
 	}
 	switch t {
 	case moonraker.TemplateSetHeaterTemperature:
@@ -622,7 +651,8 @@ func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, arg
 			if f.failM220Times > 0 {
 				f.failM220Times--
 			}
-			return errFakeUnreachable
+			// A definite HTTP error answer from Moonraker (nothing was queued).
+			return &moonraker.Error{Op: "RunTemplate", Status: 500, Body: "internal error"}
 		}
 		if f.speedMute {
 			return nil
@@ -821,10 +851,11 @@ func (f *fakePrinter) flagValue() float64 {
 
 // customMacroRaw is custom_macro: qmode_flag unless qmodeOmit.
 func (f *fakePrinter) customMacroRaw() map[string]any {
-	if f.qmodeOmit {
-		return map[string]any{}
+	out := map[string]any{"leveling_calibration": f.leveling}
+	if !f.qmodeOmit {
+		out["qmode_flag"] = f.flagValue()
 	}
-	return map[string]any{"qmode_flag": f.flagValue()}
+	return out
 }
 
 // qmodeMacroRaw is gcode_macro Qmode: flag unless qmodeOmit; qmodeMismatch
@@ -837,7 +868,11 @@ func (f *fakePrinter) qmodeMacroRaw() map[string]any {
 	if f.qmodeMismatch {
 		v = 1 - v
 	}
-	return map[string]any{"flag": v}
+	out := map[string]any{"flag": v}
+	if f.silent && !f.omitSavedFactor {
+		out["speed_factor"] = f.savedFactor // what Qmode_exit will restore
+	}
+	return out
 }
 
 func (f *fakePrinter) setSilent(on bool) {

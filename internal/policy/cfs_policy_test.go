@@ -671,11 +671,19 @@ func TestApplyStartWindow_NeverShadowsOtherStates(t *testing.T) {
 		{State: printerstate.StatePrinting, Bucket: printerstate.BucketP},
 		{State: printerstate.StatePaused, Bucket: printerstate.BucketZ},
 		{State: printerstate.StatePausing, Bucket: printerstate.BucketT},
-		{State: printerstate.StateHoming, Bucket: printerstate.BucketB},
 		{State: printerstate.StateError, Bucket: printerstate.BucketE},
 	} {
 		if got := applyStartWindow(d, snap, rec); got.State != d.State {
 			t.Errorf("%s was rewritten to %s", d.State, got.State)
+		}
+	}
+	// The self-test's own homing and calibrating are part of the window too (live
+	// bug, supervised print 2026-09-29): cancel must not disappear from it. This
+	// used to assert the opposite; the ruling reversed it.
+	for _, st := range []string{printerstate.StateHoming, printerstate.StateCalibrating} {
+		got := applyStartWindow(printerstate.Derived{State: st, Bucket: printerstate.BucketB}, snap, rec)
+		if got.State != printerstate.StatePreparing || got.Bucket != printerstate.BucketPP || !got.StartWindow {
+			t.Errorf("%s with an active record = %s/%s window %v, want the start window", st, got.State, got.Bucket, got.StartWindow)
 		}
 	}
 	// A CFS feed during the window (filament_operation, bucket U) is part of it:

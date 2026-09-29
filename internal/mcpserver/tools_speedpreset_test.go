@@ -254,3 +254,17 @@ func TestControlBodyPreemptedPartialAndStuck(t *testing.T) {
 		}
 	}
 }
+
+// The status guidance repeats it while printing.
+func TestStatusSaysWhenSilentRunsAtAnotherFactor(t *testing.T) {
+	deps, st := controlDeps(t, true, nil)
+	setPrinting(st)
+	st.mu.Lock()
+	st.silent, st.savedFactor, st.speedFactor = true, 1, 1.0 // a swap ran M220 S100 under Silent
+	st.mu.Unlock()
+	text := replyText(call(t, controlSession(t, deps), "get_printer_status", nil))
+	want := "Silent's limits are active but the speed factor is 100% (a CFS filament change or another client changed it)"
+	if !strings.Contains(text, "speed_preset: silent") || strings.Count(text, want) < 2 {
+		t.Fatalf("status lacks the note in the frontmatter and the guidance:\n%s", text)
+	}
+}

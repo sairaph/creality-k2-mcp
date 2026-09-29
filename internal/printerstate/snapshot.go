@@ -178,7 +178,7 @@ type Snapshot struct {
 func Take(ctx context.Context, deps Deps, printer domain.Printer) Snapshot {
 	snap := Snapshot{
 		Printer: printer,
-		Taken:   time.Now().UTC(),
+		Taken:   time.Now(),
 	}
 
 	var wg sync.WaitGroup

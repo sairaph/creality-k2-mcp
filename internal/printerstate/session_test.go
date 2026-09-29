@@ -1,6 +1,7 @@
 package printerstate
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
@@ -152,4 +153,91 @@ func TestRecentActivityCollapsesTemperatureRuns(t *testing.T) {
 	if len(got) != 3 || got[1] != "(2 temperature reports, latest: B:71.0 /70.0 T0:211.1 /250.0)" {
 		t.Fatalf("recent activity = %q", got)
 	}
+}
+
+// Live bug (supervised print 2026-09-29): the self-test after a CFS start homes
+// and probes the bed while print_stats still shows the previous job's complete,
+// and the homing or calibrating row used to win, taking cancel away. The start
+// window now takes precedence over the self-test's own motion, naming it.
+func TestStartWindowWinsOverTheSelfTestsOwnMotion(t *testing.T) {
+	selfTest := func(prev string) Snapshot {
+		s := syntheticIdle()
+		s.PrintStats.State = prev
+		s.WS9999.WithSelfTest = present(40)
+		return s
+	}
+	for _, prev := range []string{"complete", "standby", "cancelled"} {
+		homing := selfTest(prev)
+		homing.MotorControl.IsHoming = boolPtr(true)
+		d := DeriveActivityState(homing, nil)
+		if d.State != StatePreparing || d.Bucket != BucketPP || !d.StartWindow {
+			t.Fatalf("%s + self-test + homing: %s/%s window %v, want the start window", prev, d.State, d.Bucket, d.StartWindow)
+		}
+		if !containsSub(d.Reasons, "self-test homing") || !containsSub(d.Reasons, "motor_control.is_homing is true") {
+			t.Errorf("the reason does not name the motion: %v", d.Reasons)
+		}
+		cal := selfTest(prev)
+		cal.VirtualSDCard.BedMeshCalibrateState = boolPtr(true)
+		d = DeriveActivityState(cal, nil)
+		if d.State != StatePreparing || d.Bucket != BucketPP || !d.StartWindow || !containsSub(d.Reasons, "self-test calibrating") {
+			t.Fatalf("%s + self-test + calibrating: %s/%s window %v %v", prev, d.State, d.Bucket, d.StartWindow, d.Reasons)
+		}
+	}
+	// The signal can also be the 9999 state (standby) or a non-identity map.
+	s := syntheticIdle()
+	s.WS9999.State = present(1)
+	s.MotorControl.IsHoming = boolPtr(true)
+	if d := DeriveActivityState(s, nil); d.State != StatePreparing || !d.StartWindow {
+		t.Fatalf("standby + 9999 state 1 + homing: %s", d.State)
+	}
+}
+
+// Nothing else changes: a genuine homing or calibration outside a start window,
+// a print, and a RESUME that homes all derive as before.
+func TestHomingAndCalibratingOutsideAStartWindowAreUnchanged(t *testing.T) {
+	homing := syntheticIdle()
+	homing.MotorControl.IsHoming = boolPtr(true)
+	if d := DeriveActivityState(homing, nil); d.State != StateHoming || d.Bucket != BucketB || d.StartWindow {
+		t.Errorf("idle + homing: %s/%s window %v, want homing/B", d.State, d.Bucket, d.StartWindow)
+	}
+	cal := syntheticIdle()
+	cal.VirtualSDCard.BedMeshCalibrateState = boolPtr(true)
+	if d := DeriveActivityState(cal, nil); d.State != StateCalibrating || d.StartWindow {
+		t.Errorf("idle + calibrating: %s window %v", d.State, d.StartWindow)
+	}
+	// A complete job with the self-test progress at 100 is not a window.
+	done := syntheticIdle()
+	done.PrintStats.State = "complete"
+	done.WS9999.WithSelfTest = present(100)
+	done.MotorControl.IsHoming = boolPtr(true)
+	if d := DeriveActivityState(done, nil); d.State != StateHoming || d.StartWindow {
+		t.Errorf("complete + finished self-test + homing: %s window %v", d.State, d.StartWindow)
+	}
+	// Printing and paused are never shadowed, even with the signals present.
+	printing := syntheticIdle()
+	printing.PrintStats.State = "printing"
+	printing.PrintStats.PrintDuration = 10
+	printing.VirtualSDCard.IsActive = boolPtr(true)
+	printing.WS9999.WithSelfTest = present(40)
+	printing.MotorControl.IsHoming = boolPtr(true)
+	if d := DeriveActivityState(printing, nil); d.State != StateHoming || d.StartWindow {
+		t.Errorf("printing + homing: %s window %v (unchanged: homing)", d.State, d.StartWindow)
+	}
+	paused := syntheticIdle()
+	paused.PrintStats.State = "paused"
+	paused.PauseResume.IsPaused = boolPtr(true)
+	paused.WS9999.WithSelfTest = present(40)
+	paused.MotorControl.IsHoming = boolPtr(true)
+	if d := DeriveActivityState(paused, nil); d.StartWindow {
+		t.Errorf("paused + homing became a start window: %s", d.State)
+	}
+}
+
+func containsSub(list []string, sub string) bool {
+	for _, s := range list {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }

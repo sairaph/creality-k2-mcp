@@ -544,9 +544,12 @@ is idle within about a minute.
   `creality/userdata/config/speed_mode.json`, a power-loss-resume hint that leaving
   Silent does not clear, so a later power-loss resume (even of another print) may come
   back in Silent. Leaving Silent restores values captured on entry, which can be stale
-  after a CFS filament change. With a CFS connected the CFS's own filament-change G-code
-  may override speed and acceleration during a swap, and how Silent behaves across a swap
-  is unverified.
+  after a CFS filament change. With a CFS connected, a filament change (verified in a supervised
+  print) runs `M220 S100`, so the speed factor goes back to 100% while Silent stays on (`speed_preset`
+  stays `silent` and the state block says Silent's limits are active at that factor); Silent's
+  acceleration clamp stays in force (the swap sets acceleration 1000, inside the clamp, then 2500),
+  velocity stays 150 unless the file sets it, the part fan goes to 100% during the purge (Silent does
+  not cap it), and the nozzle goes to 265 then 270 C for the flush.
 - **Confirm-token flow:** none, sends immediately.
 - **Reply:** effect `confirmed` only when Moonraker (Silent flag and speed factor, shown on polls at
   least 1.2 s apart within about 3 s) and port 9999 (`speedMode`, `curFeedratePct`, when reported) agree;

@@ -285,9 +285,14 @@ func (p *Policy) sendSpeedPreset(ctx context.Context, deps Deps, printer domain.
 		return fail(CodeUnavailable, fmt.Sprintf("Silent is already on but the speed factor is %g%%, not 50%%, so the silent preset is not what the printer runs and sending speedMode:1 again does nothing: leave Silent with stable, standard or ultrafast, then enter it again", *snap.GCodeMove.SpeedFactor*100))
 	}
 
+	// An earlier speed write that may still be queued (queued.go): the reading can
+	// change under this call when it runs, so the no_change shortcut is skipped and
+	// this command is sent (Klipper runs queued commands in order, the newest wins).
+	outstanding := locks.pl.outstandingQueued("speed", snap)
+
 	// no_change: nothing is sent when the derived current preset already equals
 	// the target (plan S6, 2a.12), decided only with Silent and the factor known.
-	if printerstate.SpeedPresetOf(snap, derived) == params.Preset {
+	if outstanding == nil && printerstate.SpeedPresetOf(snap, derived) == params.Preset {
 		report := presetReport(params.Preset, snap, derived)
 		return Result{
 			Action: spec.Name, Accepted: false, Effect: "no_change",
@@ -302,6 +307,9 @@ func (p *Policy) sendSpeedPreset(ctx context.Context, deps Deps, printer domain.
 	}
 
 	effects := speedPresetEffects(params.Preset, silentOn)
+	if outstanding != nil {
+		effects = append(effects, queuedNote(outstanding))
+	}
 	if silentOn && !wantSilent {
 		if rec := locks.pl.getSilentRec(); rec == nil || !sameJob(rec.job, printerstate.JobIdentityFrom(snap)) {
 			effects = append(effects, silentElsewhereNote)
@@ -313,7 +321,8 @@ func (p *Policy) sendSpeedPreset(ctx context.Context, deps Deps, printer domain.
 	accepted := true
 	modeSent := false   // a speedMode frame was written
 	modeFailed := false // the speedMode frame could not be written
-	m220Failed := false // the M220 failed even after one retry
+	m220Failed := false // Moonraker definitely rejected the M220 (an HTTP error answer, after one retry)
+	m220Queued := false // the M220 timed out or lost its answer: sent, possibly queued, never retried
 	m220Arg := map[string]string{"percent": strconv.Itoa(int(targetPct))}
 
 	if wantSilent {
@@ -351,19 +360,32 @@ func (p *Policy) sendSpeedPreset(ctx context.Context, deps Deps, printer domain.
 		}
 		if !modeFailed {
 			commands = append(commands, "M220 S"+m220Arg["percent"])
-			if err := deps.Moonraker.RunTemplate(ctx, moonraker.TemplateM220, m220Arg); err != nil {
-				// One retry: if speedMode:0 already ran, the printer is at the
-				// pre-Silent factor, possibly faster than requested (plan 2a.3).
+			err := deps.Moonraker.RunTemplate(ctx, moonraker.TemplateM220, m220Arg)
+			if err != nil && !deliveryUnknown(err) && ctx.Err() == nil {
+				// A definite HTTP error answer from Moonraker: nothing was queued, so one
+				// retry is safe (if speedMode:0 already ran, the printer is at the
+				// pre-Silent factor, possibly faster than requested).
 				commands = append(commands, "M220 S"+m220Arg["percent"]+" (retry)")
-				if err2 := deps.Moonraker.RunTemplate(ctx, moonraker.TemplateM220, m220Arg); err2 != nil {
-					m220Failed = true
-					accepted = false
-					if ctx.Err() != nil {
-						notes = append(notes, "the M220 was interrupted by pause_print or cancel_print; whether it reached the printer is not known")
-					} else {
-						notes = append(notes, "M220 failed twice ("+err2.Error()+")")
-					}
-				}
+				err = deps.Moonraker.RunTemplate(ctx, moonraker.TemplateM220, m220Arg)
+			}
+			switch {
+			case err == nil:
+				locks.pl.clearQueuedKind("speed") // FIFO: an answered write proves the earlier one ran
+			case ctx.Err() != nil:
+				m220Failed = true
+				accepted = false
+				notes = append(notes, "the M220 was interrupted by pause_print or cancel_print; whether it reached the printer is not known")
+				// The request may already have gone out and still run: remember it (2).
+				locks.pl.setQueuedWrite(p.speedQueued(snap, params.Preset, targetPct))
+			case deliveryUnknown(err):
+				// Sent, possibly queued behind a running macro (a filament change or
+				// purge): never retried, the settle read decides.
+				m220Queued = true
+				accepted = false
+			default:
+				m220Failed = true
+				accepted = false
+				notes = append(notes, "Moonraker rejected M220 twice ("+err.Error()+")")
 			}
 		}
 	}
@@ -413,8 +435,24 @@ func (p *Policy) sendSpeedPreset(ctx context.Context, deps Deps, printer domain.
 		if m220Failed {
 			notes = append(notes, "the M220 call reported an error but Moonraker reads the target speed factor")
 		}
+		if m220Queued {
+			// The read shows the target, but only evidence that the target was NOT
+			// already there before the send, and that Silent's own exit (which restores
+			// the factor it saved) does not explain it, shows this M220 ran.
+			if ranEvidence(snap, derived, silentOn && !wantSilent, targetPct) {
+				accepted = true
+				notes = append(notes, queuedRanNote)
+			} else {
+				notes = append(notes, neutralConfirmNote)
+			}
+		}
 	case held:
 		notes = append(notes, fmt.Sprintf("Moonraker shows the %s preset but port 9999 reports %s: the channels disagree, so the preset is treated as unknown", params.Preset, disagree))
+	case m220Queued:
+		// Not a failure: the command may still be queued behind a running macro.
+		// Remember it, so a later call does not skip a write while it is queued.
+		locks.pl.setQueuedWrite(p.speedQueued(snap, params.Preset, targetPct))
+		notes = append(notes, queuedPendingNote+"; a fresh read shows Silent "+afterDerived.Qmode.String()+" and the speed factor at "+percentText(report.MoonrakerFactorPct)+", not "+fmt.Sprintf("%g%%", targetPct))
 	case modeSent && !wantSilent && m220Failed:
 		effect = "partial"
 		// What a fresh read shows, not what was inferred from a written frame.
@@ -475,6 +513,35 @@ func silentStuck(snap printerstate.Snapshot, d printerstate.Derived) bool {
 	}
 	s := snap.PrintStats.State
 	return s != "printing" && s != "paused"
+}
+
+// speedQueued builds the possibly-queued record for a set_speed_preset M220.
+func (p *Policy) speedQueued(snap printerstate.Snapshot, preset string, targetPct float64) *queuedWrite {
+	return &queuedWrite{
+		kind: "speed", action: ActionSetSpeedPreset, target: fmt.Sprintf("M220 S%g (the %s preset)", targetPct, preset), issuedAt: time.Now(),
+		job: printerstate.JobIdentityFrom(snap),
+		applied: func(s printerstate.Snapshot) bool {
+			return s.GCodeMove != nil && s.GCodeMove.SpeedFactor != nil && floatEqual(*s.GCodeMove.SpeedFactor*100, targetPct)
+		},
+	}
+}
+
+// ranEvidence reports whether a fresh read that shows targetPct is evidence that a
+// timed-out M220 itself ran: the factor before the send was not already the target,
+// and, when Silent's exit ran first (exit), the exit's own restore (the factor the
+// Qmode macro saved on entry) is not the target either. An unreadable saved factor
+// cannot rule the exit out, so it is no evidence.
+func ranEvidence(pre printerstate.Snapshot, _ printerstate.Derived, exit bool, targetPct float64) bool {
+	if pre.GCodeMove == nil || pre.GCodeMove.SpeedFactor == nil || floatEqual(*pre.GCodeMove.SpeedFactor*100, targetPct) {
+		return false
+	}
+	if !exit {
+		return true
+	}
+	if pre.QmodeMacro == nil || pre.QmodeMacro.SpeedFactor == nil {
+		return false
+	}
+	return !floatEqual(*pre.QmodeMacro.SpeedFactor*100, targetPct)
 }
 
 // StuckSilentWarning returns the stuck-Silent warning for a derived state, or

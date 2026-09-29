@@ -187,6 +187,12 @@ func finalizePause(ctx context.Context, deps Deps, pl *printerLock, snap printer
 	pl.clearPauseFlightIf(rec)
 }
 
+const (
+	queuedRanNote      = "the printer was busy (for example a filament change or purge) and ran the command when it got to it"
+	neutralConfirmNote = "the printer shows the requested state; whether this command itself ran is not known"
+	queuedPendingNote  = "the command may still be queued behind a running macro; check get_printer_status"
+)
+
 // isTransportError reports whether err is a transport failure or a timeout, as
 // opposed to a definitive HTTP status answer from Moonraker. Only a transport
 // error leaves it unknown whether the request took effect, so only then may a

@@ -318,6 +318,9 @@ func statusGuidance(block printerstate.StateBlock) string {
 		if block.SilentMode == "on" {
 			body += " Silent mode is on: set_speed_factor is refused while it is, so use set_speed_preset to change the speed."
 		}
+		if block.SpeedPresetNote != "" {
+			body += " " + block.SpeedPresetNote + "."
+		}
 	case printerstate.StatePreparing:
 		if block.StartWindow {
 			body = "The printer is in the self-test of a print start (several minutes, with the job still reported as " +
