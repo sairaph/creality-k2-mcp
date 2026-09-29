@@ -24,6 +24,7 @@ func DeriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 	// (not a fresh cfsConnected call) drives the flags because the early-return
 	// rows report it true without inspecting the box at all.
 	d.CFSKnown, d.CFSQuiescent, d.CFSError, d.CFSReasons = cfsFlagsFor(snap, d.CFSConnected)
+	d.Qmode = qmodeFor(snap)
 	return d
 }
 

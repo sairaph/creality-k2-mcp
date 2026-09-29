@@ -140,6 +140,8 @@ func cfsEffectNote(name ActionName, derived printerstate.Derived) string {
 	switch name {
 	case ActionSetFanSpeed, ActionSetSpeedFactor:
 		return "a CFS is connected: on a CFS print the next filament change can reset this"
+	case ActionSetSpeedPreset:
+		return "a CFS is connected: the CFS's own filament-change G-code may override speed and acceleration during a swap; how Silent behaves across a swap is unverified"
 	}
 	return ""
 }

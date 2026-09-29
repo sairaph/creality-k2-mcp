@@ -101,6 +101,39 @@ type fakePrinter struct {
 	// templateCalls counts every RunTemplate call (M221, heaters, fans...).
 	templateCalls int
 
+	// Silent-mode (Creality Qmode) simulation for set_speed_preset: silent is the
+	// flag both Moonraker sources report, savedFactor the factor Qmode captured on
+	// entry and restores on exit (gcode_macro.cfg:140-229). qmodeOmit drops both
+	// sources, qmodeMismatch makes the macro copy disagree. speedFrames records
+	// every speedMode frame in order; failSpeedMode and failM220 make that write
+	// fail; speedMute accepts M220 without effect; blockTemplate holds any setpoint template in
+	// flight until its context is cancelled. ws9999SpeedMode and
+	// ws9999FeedratePct override what 9999 reports (nil = consistent with the
+	// state), ws9999OmitSpeed drops both.
+	silent, qmodeOmit, qmodeMismatch bool
+	savedFactor                      float64
+	speedFrames                      []bool
+	failSpeedMode, failM220          bool
+	failM220Times                    int
+	speedMute, blockTemplate         bool
+	blockLight, endPrintAfterSpeed   bool
+	// blockSpeedMode holds a speedMode frame in flight (never delivered) until its
+	// context is cancelled; pauseAfterSpeed pauses the job right after Silent is
+	// entered; uploadRelease, when set, holds an Upload until it is closed.
+	blockSpeedMode, pauseAfterSpeed bool
+	// speedModeHeld and lightHeld count calls currently held by blockSpeedMode and
+	// blockLight, so a test waits for the event instead of sleeping; readDelay
+	// delays every port-9999 read (context-aware).
+	speedModeHeld, lightHeld int
+	readDelay                time.Duration
+	uploadRelease            chan struct{}
+	m220OverwriteAfter       time.Duration
+	m220OverwriteTo          float64
+	ws9999SpeedMode          *int
+	ws9999FeedratePct        *int
+	ws9999OmitSpeed          bool
+	m220Calls                int
+
 	printStartCalls  int
 	printPauseCalls  int
 	printResumeCalls int
@@ -322,7 +355,7 @@ func (f *fakePrinter) rawObjects() map[string]any {
 		"toolhead":        map[string]any{"homed_axes": f.homedAxes},
 		"exclude_object":  map[string]any{"objects": f.objects, "excluded_objects": f.excluded},
 		"display_status":  map[string]any{},
-		"custom_macro":    map[string]any{},
+		"custom_macro":    f.customMacroRaw(),
 		"gcode_move":      map[string]any{"speed_factor": f.speedFactor, "extrude_factor": f.extrudeFactor},
 		"extruder":        map[string]any{"temperature": f.nozzleTemp, "target": f.nozzleTarget, "can_extrude": f.nozzleTemp >= 170},
 		"heater_bed":      map[string]any{"temperature": f.bedTemp, "target": f.bedTarget},
@@ -337,6 +370,7 @@ func (f *fakePrinter) rawObjects() map[string]any {
 			"fan0_min": 25, "fan1_min": 50, "fan2_min": 100,
 		},
 		"gcode_macro product_param": map[string]any{"nozzle_temp": f.nozzleCap, "bed_temp": f.bedCap},
+		"gcode_macro Qmode":         f.qmodeMacroRaw(),
 	}
 	if f.omitProductParam {
 		delete(out, "gcode_macro product_param")
@@ -516,6 +550,7 @@ func (f *fakePrinter) PrintCancel(ctx context.Context) error {
 	if f.mute {
 		return nil
 	}
+	f.silent = false // END_PRINT calls Qmode_exit
 	f.nozzleTarget = 0
 	f.bedTarget = 0
 	f.fan0, f.fan1, f.fan2 = 0, 0, 0
@@ -534,6 +569,14 @@ func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, arg
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.templateCalls++
+	if f.blockTemplate {
+		// A setpoint write held in flight until its context is cancelled
+		// (pre-emption tests).
+		f.mu.Unlock()
+		<-ctx.Done()
+		f.mu.Lock()
+		return ctx.Err()
+	}
 	if f.failTemplate {
 		return errFakeUnreachable
 	}
@@ -559,6 +602,10 @@ func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, arg
 		case "2":
 			channel = domain.FanAuxiliary
 		}
+		if f.silent && float64(s)*100/255 > 50 {
+			// While Silent is on M106 caps every fan at half its range (gcode_macro.cfg).
+			s = int(50 * 255 / 100)
+		}
 		pct := float64(s) * 100 / 255
 		value := fractionFor(channel, pct)
 		switch args["fan"] {
@@ -570,8 +617,27 @@ func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, arg
 			f.fan2 = value
 		}
 	case moonraker.TemplateM220:
+		f.m220Calls++
+		if f.failM220 || f.failM220Times > 0 {
+			if f.failM220Times > 0 {
+				f.failM220Times--
+			}
+			return errFakeUnreachable
+		}
+		if f.speedMute {
+			return nil
+		}
 		p, _ := strconv.Atoi(args["percent"])
 		f.speedFactor = float64(p) / 100
+		f.events = append(f.events, "m220:"+args["percent"])
+		if f.m220OverwriteAfter > 0 {
+			// The factor lands and is then overwritten (Qmode_exit's own M220).
+			after, to := f.m220OverwriteAfter, f.m220OverwriteTo
+			go func() {
+				time.Sleep(after)
+				f.withLock(func() { f.speedFactor = to })
+			}()
+		}
 	case moonraker.TemplateM221:
 		p, _ := strconv.Atoi(args["percent"])
 		f.extrudeFactor = float64(p) / 100
@@ -593,6 +659,14 @@ func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, arg
 func (f *fakePrinter) Upload(ctx context.Context, localPath, remoteName string) (moonraker.UploadResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if rel := f.uploadRelease; rel != nil {
+		f.mu.Unlock()
+		select {
+		case <-rel:
+		case <-ctx.Done():
+		}
+		f.mu.Lock()
+	}
 	f.files[remoteName] = true
 	var out moonraker.UploadResult
 	out.Item.Path = remoteName
@@ -634,6 +708,16 @@ func (f *fakePrinter) Metadata(ctx context.Context, filename string) (moonraker.
 
 func (f *fakePrinter) ReadStatus(ctx context.Context) (crealityws.Status, error) {
 	f.mu.Lock()
+	delay := f.readDelay
+	f.mu.Unlock()
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return crealityws.Status{}, ctx.Err()
+		}
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.cfs
 	if c.ws9999Unreachable {
@@ -661,6 +745,21 @@ func (f *fakePrinter) ReadStatus(ctx context.Context) (crealityws.Status, error)
 		WithSelfTest:   p("withSelfTest", c.withSelfTest),
 		EnableSelfTest: p("enableSelfTest", c.enableSelfTest),
 	}
+	if !f.ws9999OmitSpeed {
+		mode := 0
+		if f.silent {
+			mode = 1
+		}
+		if f.ws9999SpeedMode != nil {
+			mode = *f.ws9999SpeedMode
+		}
+		feed := int(f.speedFactor*100 + 0.5)
+		if f.ws9999FeedratePct != nil {
+			feed = *f.ws9999FeedratePct
+		}
+		st.SpeedMode = crealityws.Int{Value: mode, Present: true}
+		st.CurFeedrate = crealityws.Int{Value: feed, Present: true}
+	}
 	if !c.omit["err"] {
 		st.Err = crealityws.StatusErr{ErrCode: c.errcode, Key: c.errkey, Present: true}
 	}
@@ -670,6 +769,13 @@ func (f *fakePrinter) ReadStatus(ctx context.Context) (crealityws.Status, error)
 func (f *fakePrinter) SetLight(ctx context.Context, on bool) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.blockLight {
+		f.lightHeld++
+		f.mu.Unlock()
+		<-ctx.Done()
+		f.mu.Lock()
+		return false, ctx.Err()
+	}
 	if on {
 		f.led = 1
 	} else {
@@ -702,4 +808,89 @@ func (f *fakePrinter) rackRaw() map[string]any {
 		return map[string]any{"material_type": "0" + m.RFID, "color_value": strings.TrimPrefix(m.Color, "#")}
 	}
 	return map[string]any{}
+}
+
+// --- Silent mode (Creality Qmode), plan-v0.3.0.md ---
+
+func (f *fakePrinter) flagValue() float64 {
+	if f.silent {
+		return 1
+	}
+	return 0
+}
+
+// customMacroRaw is custom_macro: qmode_flag unless qmodeOmit.
+func (f *fakePrinter) customMacroRaw() map[string]any {
+	if f.qmodeOmit {
+		return map[string]any{}
+	}
+	return map[string]any{"qmode_flag": f.flagValue()}
+}
+
+// qmodeMacroRaw is gcode_macro Qmode: flag unless qmodeOmit; qmodeMismatch
+// makes it disagree with custom_macro (an aborted macro).
+func (f *fakePrinter) qmodeMacroRaw() map[string]any {
+	if f.qmodeOmit {
+		return map[string]any{}
+	}
+	v := f.flagValue()
+	if f.qmodeMismatch {
+		v = 1 - v
+	}
+	return map[string]any{"flag": v}
+}
+
+func (f *fakePrinter) setSilent(on bool) {
+	f.withLock(func() {
+		f.silent = on
+		if on {
+			f.savedFactor = f.speedFactor
+			f.speedFactor = 0.5
+		}
+	})
+}
+
+func (f *fakePrinter) speedFramesSnapshot() []bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]bool(nil), f.speedFrames...)
+}
+
+// SetSpeedMode implements the 9999 speedMode frame as the firmware does
+// (protocol doc 2.3): speedMode:1 runs Qmode and speedMode:0 runs Qmode_exit,
+// both only while printing or paused; Qmode captures the factor and sets 50%,
+// Qmode_exit restores the captured factor.
+func (f *fakePrinter) SetSpeedMode(ctx context.Context, on bool) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failSpeedMode {
+		return false, errFakeUnreachable
+	}
+	if f.blockSpeedMode {
+		f.speedModeHeld++
+		f.mu.Unlock()
+		<-ctx.Done()
+		f.mu.Lock()
+		return false, ctx.Err()
+	}
+	f.speedFrames = append(f.speedFrames, on)
+	f.events = append(f.events, "speedMode:"+strconv.FormatBool(on))
+	inPrint := f.printState == "printing" || f.printState == "paused"
+	switch {
+	case on && inPrint && !f.silent:
+		f.silent = true
+		f.savedFactor = f.speedFactor
+		f.speedFactor = 0.5
+		if f.pauseAfterSpeed {
+			f.printState, f.isPaused = "paused", true
+		}
+		if f.endPrintAfterSpeed {
+			// The print ends right after Silent is entered: the flag stays on.
+			f.printState, f.sdActive = "complete", false
+		}
+	case !on && inPrint && f.silent:
+		f.silent = false
+		f.speedFactor = f.savedFactor
+	}
+	return true, nil
 }

@@ -303,7 +303,7 @@ func (p *Policy) executeSetFilament(ctx context.Context, deps Deps, printer doma
 	}
 
 	// Step 2: the lock, the pending marker and a fresh snapshot and gate.
-	locks, lockErr := acquireLocks(ctx, p.locks, identity)
+	locks, lockErr := acquireLocks(ctx, p.locks, identity, false, nil)
 	if lockErr != nil {
 		return fail(lockErr)
 	}

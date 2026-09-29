@@ -364,7 +364,7 @@ func TestStatusGuidanceCFSConnectedNote(t *testing.T) {
 		}
 		return out
 	}
-	base := printerstate.Derived{CFSConnected: true, CFSKnown: true, CFSQuiescent: false}
+	base := printerstate.Derived{CFSConnected: true, CFSKnown: true, CFSQuiescent: false, Qmode: printerstate.QmodeOff}
 	printing := base
 	printing.State, printing.Bucket, printing.Class = printerstate.StatePrinting, printerstate.BucketP, printerstate.ClassBusy
 	g := gateStatuses(printing)

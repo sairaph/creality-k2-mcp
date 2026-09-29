@@ -114,7 +114,8 @@ Category: monitor, read-only.
   recent console tail, idle-heat watchdog liveness and armed heaters, camera
   connection state, and (when a policy component is wired in) every
   action's current availability: `available`, `blocked(reason)`, or
-  `needs_confirmation`. With a CFS connected the frontmatter also carries a
+  `needs_confirmation`. While printing or paused it also shows `speed_preset`, and a warning when
+  Silent mode was left on outside a print. With a CFS connected the frontmatter also carries a
   `cfs` block (`state` idle, busy, in_print, error or unknown, plus the
   `reasons`), and the body says what works in that state and what must be done
   at the printer. Call this before attempting any write and again
@@ -266,9 +267,10 @@ only.
 - **State requirements:** none; needs port 9999 (an error `unavailable` otherwise,
   since there is no built-in catalog).
 - Entries: `id` (5 characters), `brand`, `name`, `material`, `nozzle_min_c`,
-  `nozzle_max_c`, and `writable` with `why_not` (an entry with a 0-0
-  temperature range, one above the printer's live nozzle limit, or a printer state
-  that does not allow an edit). Without `brand` and `material` filters it returns the
+  `nozzle_max_c`, and `writable` with `why_not` only for an entry-level reason (an entry
+  with a 0-0 temperature range, or one above the printer's live nozzle limit). A
+  printer-wide block (printing, a busy CFS, a start in flight, control off) makes every entry
+  `writable: false` and is stated once in `edit_blocked` (frontmatter and body), not repeated per entry. Without `brand` and `material` filters it returns the
   whole catalog (dozens of entries), so filter when you can.
 
 ## Camera
@@ -365,7 +367,7 @@ While a CFS is connected, each control tool follows a rule (the reasons are in
 | Tool | With a CFS connected |
 | --- | --- |
 | `pause_print`, `cancel_print`, `set_light`, `set_bed_temperature`, `upload_gcode_file`, `delete_gcode_file` | Only the normal state rules; no CFS condition |
-| `exclude_object`, `set_speed_factor` | The CFS must be read and report no error |
+| `exclude_object`, `set_speed_factor`, `set_speed_preset` | The CFS must be read and report no error |
 | `set_fan_speed` | Idle: the CFS must be at rest. Printing: read and no error |
 | `set_nozzle_temperature` | Idle: the CFS must be at rest. During a print: refused |
 | `set_flow_factor` | Refused |
@@ -421,6 +423,10 @@ is idle within about a minute.
   and `unconfirmed` (writing the start frame reported an error but it may have been
   delivered: the print may be starting, follow it with `get_printer_status` and do not
   start again).
+- **Silent mode left on:** if Silent mode is still on from an earlier print (idle with the
+  Silent flag on), the proposal and the result carry a warning: START_PRINT does not clear it,
+  so the print runs with Silent's acceleration clamp until Klipper restarts (a firmware restart
+  or a power cycle clears it). It is a warning, not a refusal.
 
 ### `pause_print`
 
@@ -436,6 +442,13 @@ is idle within about a minute.
   the job reports paused, or `pausing` ("the printer is parking and wiping the nozzle and will report
   paused shortly") as soon as the printer shows it is parking. While pausing only `cancel_print` is
   allowed, and cancel is never blocked by the pause in flight.
+- **Pre-emption:** if a setpoint action (`set_speed_preset`, `set_speed_factor`, `set_flow_factor`,
+  `set_fan_speed`, `set_nozzle_temperature`, `set_bed_temperature`, `set_light`) is in flight, the pause
+  cancels it and takes the lock instead of failing with a conflict; the setpoint call reports effect
+  `preempted`. The confirming `cancel_print` call (with its token) does the same; the cancel
+  proposal pre-empts nothing. Pause and cancel never pre-empt anything but those setpoint actions.
+  Pre-emption works within one server process: a pause from another MCP server process uses
+  the bounded (3 s) wait on the cross-process file lock.
 
 ### `resume_print`
 
@@ -496,7 +509,9 @@ is idle within about a minute.
   may not drop below the configured floor of its current speed in one call
   (default 50% of current).
 - **Side effects:** changes the fan's PWM output; the case fan can be
-  overridden again later by its own thermostat.
+  overridden again later by its own thermostat. While Silent mode is on the firmware
+  caps every fan at half its range: a request above 50% is applied as 50% and the result
+  says so.
 - **Confirm-token flow:** none.
 
 ### `set_speed_factor`
@@ -506,7 +521,44 @@ is idle within about a minute.
   (default 50-150%).
 - **Side effects:** Moonraker `M220`; runtime only, both START_PRINT and
   END_PRINT reset it.
+- **Silent mode:** refused while Silent mode is on or cannot be read (Silent's end restores
+  the factor it saved on entry, which would silently discard this change); use
+  `set_speed_preset`.
 - **Confirm-token flow:** none.
+
+### `set_speed_preset`
+
+- **Parameters:** `printer` (optional), `preset` (required: `silent`, `stable`,
+  `standard` or `ultrafast`).
+- **State requirements:** printing only (paused and idle are refused), and the
+  Silent state must be readable. The preset's speed factor (silent 50, stable 50,
+  standard 100, ultrafast 125) must lie inside the configured speed-factor band; leaving Silent to any
+  in-band non-Silent preset is always allowed, and a refusal while Silent is on says how to
+  leave it.
+- **Side effects:** stable, standard and ultrafast: Moonraker `M220` (runtime only,
+  reset by START_PRINT and END_PRINT), preceded by port-9999 `speedMode:0` when Silent is on.
+  silent: port-9999 `speedMode:1` only; it sets velocity 150 mm/s (a file that sets its
+  own velocity overrides it), clamps acceleration to 2500 mm/s2, sets pressure advance 0.05,
+  caps all three fans to half their range and sets the factor to 50%. **Silent writes a
+  persistent file:** while printing, the firmware writes
+  `creality/userdata/config/speed_mode.json`, a power-loss-resume hint that leaving
+  Silent does not clear, so a later power-loss resume (even of another print) may come
+  back in Silent. Leaving Silent restores values captured on entry, which can be stale
+  after a CFS filament change. With a CFS connected the CFS's own filament-change G-code
+  may override speed and acceleration during a swap, and how Silent behaves across a swap
+  is unverified.
+- **Confirm-token flow:** none, sends immediately.
+- **Reply:** effect `confirmed` only when Moonraker (Silent flag and speed factor, shown on polls at
+  least 1.2 s apart within about 3 s) and port 9999 (`speedMode`, `curFeedratePct`, when reported) agree;
+  `no_change` (nothing sent) when the printer already runs the preset; `unconfirmed` with
+  both readings when they disagree (the state block's `speed_preset` then shows `unknown`);
+  `partial` when Silent was left but the factor could not be set (the reply states what a fresh read
+  shows); `stuck_silent_possible` when Silent is on and the job is neither printing nor paused (the print ended,
+  was cancelled or errored; a paused print keeps its real outcome and a note that Silent stays on); `preempted` when `pause_print` or `cancel_print`
+  took the lock. The `speed_preset` field (silent, stable, standard, ultrafast, custom or
+  unknown), with `silent_mode` and 9999's `speed_mode_9999` and `cur_feedrate_pct_9999`, is in every state
+  block while printing or paused and never while idle; an idle printer with Silent left on gets
+  a stuck-Silent warning in `get_printer_status` instead.
 
 ### `set_flow_factor`
 

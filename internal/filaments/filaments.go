@@ -88,7 +88,8 @@ type View struct {
 	// EditBlocked is why set_filament_definition cannot be used right now for
 	// ANY slot (the printer is not idle, the CFS is not at rest, a start is in
 	// flight, control is off), empty when the printer allows an edit. Every slot
-	// then shows editable false with this reason; per-slot reasons are separate.
+	// then shows editable false; this reason is stated once here, and a slot's
+	// why_not holds only its own slot-level reason.
 	EditBlocked string `yaml:"edit_blocked,omitempty" json:"edit_blocked,omitempty"`
 }
 
@@ -391,19 +392,14 @@ type CatalogEntry struct {
 	WhyNot     string  `yaml:"why_not,omitempty" json:"why_not,omitempty"`
 }
 
-// ifWhy renders an additional reason after the state reason.
-func ifWhy(why string) string {
-	if why == "" {
-		return ""
-	}
-	return "; also this entry: " + why
-}
-
 // Catalog reads the printer's catalog and filters it by brand and material
 // (case-insensitive exact match; an empty filter matches everything). writable
 // takes the printer's current state (editBlocked, from EditGate) and the live
 // nozzle limit (nozzleCapC, nil when unknown) into account, so it does not
-// promise an edit Execute would refuse for a reason it can already see.
+// promise an edit Execute would refuse for a reason it can already see. A
+// printer-wide block makes every entry not writable without repeating the
+// reason on each: the caller states editBlocked once, and WhyNot holds only
+// entry-level reasons (a 0-0 range, a maximum above the nozzle limit).
 func Catalog(ctx context.Context, ws any, brand, material, editBlocked string, nozzleCapC *float64) ([]CatalogEntry, error) {
 	r, ok := ws.(CatalogReader)
 	if !ok {
@@ -427,7 +423,8 @@ func Catalog(ctx context.Context, ws any, brand, material, editBlocked string, n
 			w, why = false, fmt.Sprintf("its maximum of %g C is above this printer's nozzle limit of %g C", e.MaxTemp, *nozzleCapC)
 		}
 		if editBlocked != "" {
-			why = "the printer does not allow an edit right now: " + editBlocked + ifWhy(why)
+			// The printer-wide reason is stated once by the caller (the reply's
+			// edit_blocked); an entry keeps only its own entry-level reason.
 			w = false
 		}
 		out = append(out, CatalogEntry{ID: e.ID, Brand: e.Brand, Name: e.Name, Material: e.Type,

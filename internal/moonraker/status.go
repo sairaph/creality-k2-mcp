@@ -415,7 +415,25 @@ type CustomMacro struct {
 	DefaultExtruderTemp float64 `json:"default_extruder_temp"`
 	DefaultBedTemp      float64 `json:"default_bed_temp"`
 	G28ExtTemp          float64 `json:"g28_ext_temp"`
-	QmodeFlag           float64 `json:"qmode_flag"`
+	// QmodeFlag is Creality's Silent-mode flag (custom_macro.py: SET_QMODE_FLAG).
+	// It must distinguish "not reported" from a genuine 0 (Silent off); nil must
+	// fail closed, never be read as "Silent is off" (plan-v0.3.0.md 2a.1).
+	QmodeFlag *float64 `json:"qmode_flag"`
+}
+
+// QmodeMacro is Creality's "gcode_macro Qmode" object. Flag is the macro's own
+// copy of the Silent-mode state; the macro sets it and calls SET_QMODE_FLAG
+// as two separate lines, so an aborted macro can leave the two disagreeing.
+// printerstate treats any disagreement, or a missing value, as unknown (plan
+// 2a.1).
+type QmodeMacro struct {
+	Flag *float64 `json:"flag"`
+}
+
+func DecodeQmodeMacro(raw json.RawMessage) (QmodeMacro, error) {
+	var v QmodeMacro
+	err := json.Unmarshal(raw, &v)
+	return v, err
 }
 
 func DecodeCustomMacro(raw json.RawMessage) (CustomMacro, error) {

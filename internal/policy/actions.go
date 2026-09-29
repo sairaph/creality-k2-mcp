@@ -172,6 +172,9 @@ func (p *Policy) evaluateParams(ctx context.Context, deps Deps, printer domain.P
 	case ActionSetFanSpeed:
 		return spec.Confirmation, checkFan(snap, derived, params, settings)
 
+	case ActionSetSpeedPreset:
+		return spec.Confirmation, checkPresetName(params.Preset)
+
 	case ActionSetSpeedFactor:
 		if !domain.WithinRange(params.Percent, settings.Bands.SpeedFactorMinPercent, settings.Bands.SpeedFactorMaxPercent) {
 			return spec.Confirmation, &Error{Code: CodeInvalidInput, Message: bandMessage("speed factor", params.Percent, settings.Bands.SpeedFactorMinPercent, settings.Bands.SpeedFactorMaxPercent)}
@@ -434,6 +437,21 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 		defer locks.pl.setPending(nil)
 	}
 
+	// While Silent is on the firmware caps every fan at half its range (M106,
+	// gcode_macro.cfg), so a fan request above 50% is applied as 50%: settle
+	// against the capped value and say so, instead of a false unconfirmed
+	// (plan 2a.8).
+	settleParams := params
+	var extraEffects []string
+	if spec.Name == ActionSetFanSpeed && derived.Qmode == printerstate.QmodeOn {
+		extraEffects = append(extraEffects, "Silent mode is on: it caps all fans (part, case, auxiliary) at half their range (50%), so a request above 50% is applied as 50%")
+		if params.FanPercent > 50 {
+			settleParams.FanPercent = 50
+		}
+	} else if spec.Name == ActionSetFanSpeed && derived.Qmode == printerstate.QmodeUnknown && params.FanPercent > 50 {
+		extraEffects = append(extraEffects, "the Silent mode state could not be read: if Silent is on, the firmware caps every fan at 50%, and this request above 50% will not read back as requested")
+	}
+
 	sendErr := dispatchSend(ctx, deps, spec.Name, params)
 	accepted := sendErr == nil
 	if spec.Name == ActionResumePrint || spec.Name == ActionCancelPrint {
@@ -442,7 +460,7 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 		locks.pl.setPauseRec(nil)
 	}
 
-	afterSnap, afterDerived, confirmed := p.pollUntilSettle(ctx, deps, printer, locks, pendingKind, spec.SettleTimeout, settleFuncFor(spec.Name, params))
+	afterSnap, afterDerived, confirmed := p.pollUntilSettle(ctx, deps, printer, locks, pendingKind, spec.SettleTimeout, settleFuncFor(spec.Name, settleParams))
 	// A cancel whose HTTP call failed with a transport error or timeout (Moonraker
 	// answers only after the macro) but whose effect the settle poll then confirmed
 	// did reach the printer: count it as accepted. Never for an HTTP status
@@ -456,7 +474,7 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 		Action:   spec.Name,
 		Accepted: accepted,
 		Effect:   effectString(confirmed),
-		Effects:  withCFSNote(spec.Effects, spec.Name, derived),
+		Effects:  append(withCFSNote(spec.Effects, spec.Name, derived), extraEffects...),
 		Commands: spec.Commands,
 		Before:   before,
 		After:    printerstate.BuildStateBlock(afterSnap, afterDerived, nil),

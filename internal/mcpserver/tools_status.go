@@ -10,6 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sairaph/creality-k2-mcp/internal/domain"
 	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
 	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 	"github.com/sairaph/mcp-wizard/render"
 )
@@ -183,6 +184,11 @@ func getPrinterStatusHandler(s *Server) func(context.Context, *mcp.CallToolReque
 
 		front := &statusFront{StateBlock: block}
 		body := fmt.Sprintf("%s is %s.\n\n%s", block.PrinterName, summarizeState(block), statusGuidance(block))
+		// Silent left on while not printing outlives the print and clamps the next
+		// one (plan-v0.3.0.md 2a.9): a warning here, never a refusal.
+		if w := policy.StuckSilentWarning(derived); w != "" {
+			body += " " + w + "."
+		}
 		return successResult(front, actions, body), nil, nil
 	}
 }
@@ -307,7 +313,11 @@ func statusGuidance(block printerstate.StateBlock) string {
 		body = "A job is printing. Call get_current_job for its progress, current layer and ETA. If control " +
 			"tools are enabled, pause_print pauses it and cancel_print stops it (cancel_print needs the " +
 			"two-step proposal flow: call it once with no confirm_token to see what will happen, then again " +
-			"with the returned confirm_token to actually cancel)."
+			"with the returned confirm_token to actually cancel). set_speed_preset switches Creality's speed presets " +
+			"(silent, stable, standard, ultrafast); speed_preset in the state block shows the current one."
+		if block.SilentMode == "on" {
+			body += " Silent mode is on: set_speed_factor is refused while it is, so use set_speed_preset to change the speed."
+		}
 	case printerstate.StatePreparing:
 		if block.StartWindow {
 			body = "The printer is in the self-test of a print start (several minutes, with the job still reported as " +

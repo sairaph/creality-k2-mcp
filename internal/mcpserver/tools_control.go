@@ -55,7 +55,7 @@ func registerControlTools(s *Server) {
 			"(default: the printer's own setting); source spool (start from the side spool) is not yet verified on this " +
 			"firmware and is refused. source, slot_map and self_test only apply with a CFS connected; without one the call " +
 			"is refused rather than silently ignoring them. Related: get_filaments, list_gcode_files, get_printer_status, pause_print and " +
-			"cancel_print once printing.",
+			"cancel_print once printing. If Silent mode was left on by an earlier print (a warning appears in the proposal and result), this print will run with Silent's acceleration clamp until Klipper restarts.",
 		InputSchema: withEnum(inputSchema[startPrintInput](), "source", "cfs", "spool"),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false},
 	}, startPrintHandler(s))
@@ -130,7 +130,7 @@ func registerControlTools(s *Server) {
 			"thermostat and can be overridden again later by that thermostat if the chamber temperature crosses " +
 			"its own target), or \"auxiliary\". Available while printing or idle. While printing, the part fan " +
 			"may not be dropped below the configured floor of its current speed in one call (default 50% of the " +
-			"current value; widen it in settings for a larger drop). Sends immediately with no confirm_token. " +
+			"current value; widen it in settings for a larger drop). While Silent mode is on the firmware caps all fans at half their range, so a request above 50% is applied as 50% and the result says so. Sends immediately with no confirm_token. " +
 			"Related: get_printer_status for the current fan speeds. With a CFS connected, idle needs the CFS at rest and a print needs it to read clean with no error; a filament change can reset the value.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true},
 		InputSchema: withEnum(inputSchema[setFanSpeedInput](), "fan", fanChannelValues()...),
@@ -140,10 +140,33 @@ func registerControlTools(s *Server) {
 		Name: "set_speed_factor",
 		Description: "Sets the print speed factor as a percent (Moonraker M220), only available while printing, " +
 			"bounded to the configured band (default 50-150%; widen it in settings for a larger change). This is " +
-			"runtime only: both START_PRINT and END_PRINT reset it. Sends immediately with no confirm_token. " +
-			"Related: set_flow_factor, get_printer_status for the current factor. With a CFS connected it needs the CFS to read clean with no error, and a filament change can reset it.",
+			"runtime only: both START_PRINT and END_PRINT reset it. It is refused while Silent mode is on (or cannot be read): Silent's end restores the speed factor it saved on entry, which would silently discard this change, so use set_speed_preset. Sends immediately with no confirm_token. " +
+			"Related: set_speed_preset, set_flow_factor, get_printer_status for the current factor. With a CFS connected it needs the CFS to read clean with no error, and a filament change can reset it.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true},
 	}, setSpeedFactorHandler(s))
+
+	registerTool(s, domain.ToolInfo{Name: "set_speed_preset", Category: domain.ToolCategoryControl}, &mcp.Tool{
+		Name: "set_speed_preset",
+		Description: "Applies one of Creality's four speed presets while a print is running: silent, stable, standard or " +
+			"ultrafast. stable, standard and ultrafast set the speed factor to 50%, 100% and 125% (Moonraker M220, runtime only: " +
+			"START_PRINT and END_PRINT reset it). silent is different: it switches on Creality's quiet mode, which sets velocity " +
+			"150 mm/s (a file that sets its own velocity overrides it) and clamps acceleration to 2500 mm/s2, sets pressure advance " +
+			"0.05, caps all three fans (part, case, auxiliary) to half their range and sets the speed factor to 50%. SILENT WRITES A " +
+			"PERSISTENT FILE: entering it while printing makes the firmware write creality/userdata/config/speed_mode.json " +
+			"({\"speed_mode\":2}), a power-loss-resume hint that leaving Silent does not clear, so a later power-loss resume (even of " +
+			"another print) may come back in Silent; tell the user before choosing silent. Leaving Silent restores the velocity, " +
+			"acceleration, corner velocity, pressure advance and fan values captured when it was entered, which can be stale after a " +
+			"CFS filament change. Only available while printing (not paused, not idle) and the preset's factor must lie inside the " +
+			"configured speed-factor band; it sends immediately with no confirm_token, and returns no_change without sending when " +
+			"the printer already runs that preset. The result reports both channels (Moonraker's Silent flag and speed factor, and port " +
+			"9999's speedMode and curFeedratePct): confirmed only when they agree with the target, partial if Silent was left but " +
+			"the speed factor could not be set, and stuck_silent_possible if Silent is on while the job is neither printing nor paused (it ended, was cancelled or errored; a paused print keeps its real outcome). speed_preset in every " +
+			"state block (while printing or paused) shows the current preset. While Silent is on set_speed_factor is refused: use " +
+			"this tool. Related: get_printer_status, set_speed_factor. With a CFS connected it needs the CFS to read clean with no " +
+			"error, and the CFS's own filament-change G-code may override speed and acceleration during a swap.",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true},
+		InputSchema: withEnum(inputSchema[setSpeedPresetInput](), "preset", "silent", "stable", "standard", "ultrafast"),
+	}, setSpeedPresetHandler(s))
 
 	registerTool(s, domain.ToolInfo{Name: "set_flow_factor", Category: domain.ToolCategoryControl}, &mcp.Tool{
 		Name: "set_flow_factor",
@@ -221,6 +244,36 @@ type controlFront struct {
 	// mapping; Filament is a set_filament_definition edit (plan 3.2).
 	Mapping  []mappingFront `yaml:"mapping,omitempty"`
 	Filament *filamentFront `yaml:"filament,omitempty"`
+
+	// PresetResult is a set_speed_preset outcome's two channel readings (plan
+	// 2a.5): Moonraker's and port 9999's. (The state block's own speed_preset is
+	// the derived current preset.)
+	PresetResult *presetResultFront `yaml:"preset_result,omitempty"`
+}
+
+// presetResultFront is set_speed_preset's report in the frontmatter.
+type presetResultFront struct {
+	Target             string   `yaml:"target"`
+	MoonrakerSilent    string   `yaml:"moonraker_silent"`
+	MoonrakerFactorPct *float64 `yaml:"moonraker_speed_factor_percent,omitempty"`
+	SpeedMode9999      *int     `yaml:"speed_mode_9999,omitempty"`
+	CurFeedratePct9999 *int     `yaml:"cur_feedrate_pct_9999,omitempty"`
+	Notes              []string `yaml:"notes,omitempty"`
+}
+
+func presetResultFrom(r *policy.SpeedPresetReport) *presetResultFront {
+	if r == nil {
+		return nil
+	}
+	var pct *float64
+	if r.MoonrakerFactorPct != nil {
+		v := float64(int(*r.MoonrakerFactorPct*10+0.5)) / 10
+		pct = &v
+	}
+	return &presetResultFront{
+		Target: r.Preset, MoonrakerSilent: r.MoonrakerSilent, MoonrakerFactorPct: pct,
+		SpeedMode9999: r.SpeedMode9999, CurFeedratePct9999: r.CurFeedratePct9999, Notes: r.Notes,
+	}
 }
 
 func (f *controlFront) StateBlockPtr() *printerstate.StateBlock { return &f.StateBlock }
@@ -234,17 +287,18 @@ func controlFrontFrom(res policy.Result) *controlFront {
 	before := res.Before
 	mapping := mappingFrom(res.Mapping)
 	f := &controlFront{
-		StateBlock: before,
-		Action:     string(res.Action),
-		Proposed:   res.Proposed,
-		Token:      res.Token,
-		Accepted:   res.Accepted,
-		Effect:     res.Effect,
-		Effects:    res.Effects,
-		Commands:   res.Commands,
-		Before:     &before,
-		Mapping:    mapping,
-		Filament:   filamentFrom(res.Filament),
+		StateBlock:   before,
+		Action:       string(res.Action),
+		Proposed:     res.Proposed,
+		Token:        res.Token,
+		Accepted:     res.Accepted,
+		Effect:       res.Effect,
+		Effects:      res.Effects,
+		Commands:     res.Commands,
+		Before:       &before,
+		Mapping:      mapping,
+		Filament:     filamentFrom(res.Filament),
+		PresetResult: presetResultFrom(res.SpeedPreset),
 	}
 	if res.Proposed {
 		if !res.ExpiresAt.IsZero() {
@@ -369,10 +423,36 @@ func controlBody(res policy.Result) string {
 
 	switch res.Effect {
 	case "no_change":
-		fmt.Fprintf(&b, "%s: nothing was sent. The slot already holds this definition.", res.Action)
+		// The generic no_change outcome (plan-v0.3.0.md 2a.12): nothing was sent
+		// because the printer already has what was asked for.
 		if res.Filament != nil {
+			fmt.Fprintf(&b, "%s: nothing was sent. The slot already holds this definition.", res.Action)
 			fmt.Fprintf(&b, " %s: %s.", res.Filament.Slot, slotDefText(res.Filament.Before))
+			return b.String()
 		}
+		if res.SpeedPreset != nil {
+			fmt.Fprintf(&b, "%s: nothing was sent. The printer already runs the %s preset (Moonraker: Silent %s, speed factor %s).",
+				res.Action, res.SpeedPreset.Preset, res.SpeedPreset.MoonrakerSilent, percentText(res.SpeedPreset.MoonrakerFactorPct))
+			return b.String()
+		}
+		fmt.Fprintf(&b, "%s: nothing was sent. The printer already has this value.", res.Action)
+		return b.String()
+	case "preempted":
+		if len(res.Commands) == 0 {
+			fmt.Fprintf(&b, "%s was interrupted: pause_print or cancel_print took the printer lock before it sent anything, so nothing was sent. The state block shows what the printer reports now.", res.Action)
+		} else {
+			fmt.Fprintf(&b, "%s was interrupted: pause_print or cancel_print took the printer lock while it was in flight, so it was stopped before it finished. What reached the printer is not known: the state block is a fresh read of what it reports now, and get_printer_status shows it again.", res.Action)
+		}
+		appendEffects(&b, res.Effects)
+		return b.String()
+	case "partial":
+		fmt.Fprintf(&b, "%s was only PARTLY applied to %s. It did not finish what was asked, and the printer is in the state the state block shows.", res.Action, res.Printer.Name)
+		appendEffects(&b, res.Effects)
+		b.WriteString("\n\nCall get_printer_status to see the current speed factor; call set_speed_preset again to finish, or set_speed_factor once Silent is off.")
+		return b.String()
+	case "stuck_silent_possible":
+		fmt.Fprintf(&b, "%s was sent to %s, but the printer is no longer printing and Silent mode is on: it may be STUCK ON.", res.Action, res.Printer.Name)
+		appendEffects(&b, res.Effects)
 		return b.String()
 	case "refused_map_mismatch":
 		fmt.Fprintf(&b, "%s was NOT started: after the mapping was sent, the printer's own map did not match it, so the start frame was not sent.", res.Action)
@@ -397,6 +477,21 @@ func controlBody(res policy.Result) string {
 		return b.String()
 	}
 
+	// A confirmed effect never reads as a rejection: the write reported an error
+	// (for example a timeout after Moonraker applied it), but a fresh read shows the
+	// expected result. The notes say which call failed.
+	if res.Effect == "confirmed" && !res.Accepted {
+		fmt.Fprintf(&b, "%s reported an error while sending to %s, but a fresh read shows the expected result, so it is confirmed.", res.Action, res.Printer.Name)
+		appendEffects(&b, res.Effects)
+		return b.String()
+	}
+	if res.SpeedPreset != nil && res.Effect == "unconfirmed" {
+		fmt.Fprintf(&b, "%s was not confirmed on %s: Moonraker's and port 9999's readings do not both show the %s preset. "+
+			"Nothing more was sent. The state block and the notes below show what each channel reports; call get_printer_status to check the current speed before deciding whether to try again.",
+			res.Action, res.Printer.Name, res.SpeedPreset.Preset)
+		appendEffects(&b, res.Effects)
+		return b.String()
+	}
 	if !res.Accepted {
 		fmt.Fprintf(&b, "%s was sent to %s but the printer rejected or failed to accept it. Call "+
 			"get_printer_status to see the current state before retrying.", res.Action, res.Printer.Name)
@@ -450,6 +545,14 @@ func controlBody(res policy.Result) string {
 			"restored.", *res.StartPrintFlowRestored)
 	}
 	return b.String()
+}
+
+// percentText renders an optional percent for body text.
+func percentText(p *float64) string {
+	if p == nil {
+		return "unknown"
+	}
+	return fmt.Sprintf("%.0f%%", *p)
 }
 
 func appendEffects(b *strings.Builder, effects []string) {
@@ -745,6 +848,29 @@ func setSpeedFactorHandler(s *Server) func(context.Context, *mcp.CallToolRequest
 			return errRes, nil, nil
 		}
 		res, err := s.executeControl(ctx, printer, policy.ActionSetSpeedFactor, policy.Params{Percent: in.Percent}, "")
+		if err != nil {
+			return controlFailure(err), nil, nil
+		}
+		front := controlFrontFrom(res)
+		return successResult(front, nil, controlBody(res)), nil, nil
+	}
+}
+
+// --- set_speed_preset ---
+
+type setSpeedPresetInput struct {
+	Printer *string `json:"printer,omitempty" jsonschema:"printer id or name, case insensitive; defaults to the one enabled printer"`
+	Preset  string  `json:"preset" jsonschema:"silent, stable (speed factor 50%), standard (100%) or ultrafast (125%)"`
+}
+
+func setSpeedPresetHandler(s *Server) func(context.Context, *mcp.CallToolRequest, setSpeedPresetInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in setSpeedPresetInput) (*mcp.CallToolResult, any, error) {
+		printer, errRes := s.resolvePrinter(printerQuery(in.Printer))
+		if errRes != nil {
+			return errRes, nil, nil
+		}
+		params := policy.Params{Preset: strings.ToLower(strings.TrimSpace(in.Preset))}
+		res, err := s.executeControl(ctx, printer, policy.ActionSetSpeedPreset, params, "")
 		if err != nil {
 			return controlFailure(err), nil, nil
 		}

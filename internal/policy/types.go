@@ -21,6 +21,7 @@ const (
 	ActionSetBedTemperature     ActionName = "set_bed_temperature"
 	ActionSetFanSpeed           ActionName = "set_fan_speed"
 	ActionSetSpeedFactor        ActionName = "set_speed_factor"
+	ActionSetSpeedPreset        ActionName = "set_speed_preset"
 	ActionSetFlowFactor         ActionName = "set_flow_factor"
 	ActionSetLight              ActionName = "set_light"
 	ActionExcludeObject         ActionName = "exclude_object"
@@ -40,6 +41,7 @@ var Actions = []ActionName{
 	ActionSetBedTemperature,
 	ActionSetFanSpeed,
 	ActionSetSpeedFactor,
+	ActionSetSpeedPreset,
 	ActionSetFlowFactor,
 	ActionSetLight,
 	ActionExcludeObject,
@@ -93,6 +95,9 @@ type Params struct {
 	// Percent is the requested speed or flow factor, e.g. 100 for
 	// unchanged (set_speed_factor, set_flow_factor).
 	Percent float64
+	// Preset is the requested speed preset (set_speed_preset): silent, stable,
+	// standard or ultrafast.
+	Preset string
 	// On is the requested light state (set_light).
 	On bool
 	// ObjectName is the object to exclude (exclude_object), matched
@@ -209,9 +214,27 @@ type Result struct {
 	// the printer's same_material regrouping (plan 3.2).
 	Filament *FilamentChange
 
+	// SpeedPreset is set by set_speed_preset: the target and what each channel
+	// reported after the write (plan-v0.3.0.md 2a.5).
+	SpeedPreset *SpeedPresetReport
+
 	// Mapping is set by a CFS start_print proposal and result: one entry per
 	// file filament with the slot it maps to (plan 3.2, 3.4).
 	Mapping []MappedFilament
+}
+
+// SpeedPresetReport is a set_speed_preset outcome's two channel readings:
+// Moonraker's (Silent flag and speed factor, authoritative) and port 9999's
+// (speedMode and curFeedratePct, corroborating; nil when it did not report
+// them). Notes explain a disagreement, an absent 9999 reading or a partial
+// application.
+type SpeedPresetReport struct {
+	Preset             string
+	MoonrakerSilent    string // on, off or unknown
+	MoonrakerFactorPct *float64
+	SpeedMode9999      *int
+	CurFeedratePct9999 *int
+	Notes              []string
 }
 
 // SlotDefinition is one slot's filament definition as the printer reports it

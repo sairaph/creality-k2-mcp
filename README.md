@@ -8,7 +8,10 @@ temperatures, fans, speed and flow, and manage files on the printer.
 
 Every write is state-aware and fails closed: the server reads the printer's
 actual state before acting, never breaks a running print, and never changes
-a persistent printer setting. See [Safety model](docs/safety.md) for the
+a persistent printer setting, with the three disclosed exceptions in the
+Safety model (cancelling a print clears the power-loss-recovery slot, entering
+Silent speed mode writes a power-loss-resume hint file, and editing a filament
+slot rewrites its stored definition, which you asked for). See [Safety model](docs/safety.md) for the
 full design.
 
 ## Supported printers
@@ -67,7 +70,7 @@ manual client configuration.
    offer to open a continuously updating live view in your browser with
    `open_camera_view`.
 5. If you enabled the `control` preset, you can ask it to start, pause,
-   resume or cancel a print, adjust temperatures or fans, and more - see
+   resume or cancel a print, adjust temperatures, fans or the speed preset, and more - see
    [docs/tools.md](docs/tools.md) for the full list.
 
 ## Tool presets
@@ -99,9 +102,15 @@ reference and [docs/tools.md](docs/tools.md) for every tool.
   only available in the right states, mid-print setpoint changes are bounded
   to a configurable band, and a change while paused is blocked outright
   since the printer's own resume macro would silently undo it.
-- **Never changes a persistent printer setting.** The server can only ever
+- **Never changes a persistent printer setting, with three disclosed exceptions.** The server can only ever
   send a small, fixed, explicitly enumerated set of commands - there is no
-  path to arbitrary G-code, a macro, calibration, or EEPROM/config writes.
+  path to arbitrary G-code, a macro, calibration, or EEPROM/config writes. The
+  exceptions are three fixed actions, disclosed in their descriptions and results:
+  `cancel_print` clears the power-loss-recovery slot (EEPROM);
+  `set_speed_preset` with `silent` makes the printer write
+  `creality/userdata/config/speed_mode.json`, a power-loss-resume hint that leaving
+  Silent does not clear; and `set_filament_definition` rewrites one slot's stored
+  filament definition, an explicit write you request, persistent until changed again.
 - **Two-step `confirm_token` confirmation** for destructive or hard-to-verify
   actions (resume, cancel, exclude object, delete a file, overwrite a file,
   delete a recording): propose, then confirm, with the printer's state
