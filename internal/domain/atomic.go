@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"github.com/sairaph/creality-k2-mcp/internal/userhome"
 	"os"
 	"path/filepath"
 )
@@ -13,7 +14,7 @@ const appDirName = ".creality-k2-mcp"
 // baseDir resolves ~/.creality-k2-mcp. It does not create anything: a caller
 // that only reads must not bring the directory into existence.
 func baseDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userhome.Dir()
 	if err != nil {
 		return "", fmt.Errorf("resolve home directory: %w", err)
 	}

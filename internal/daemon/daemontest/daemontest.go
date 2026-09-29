@@ -11,6 +11,7 @@ package daemontest
 
 import (
 	"fmt"
+	"github.com/sairaph/creality-k2-mcp/internal/userhome/testhome"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,6 +25,10 @@ import (
 // (paths.go daemonDir).
 const fallbackDirPrefix = "creality-k2-mcp-"
 
+// Guard also isolates HOME/USERPROFILE and the other per-user environment
+// through internal/userhome/testhome, so no package using it can reach the
+// real home directory.
+//
 // Guard points daemon.FallbackRoot at a short, package-owned temp directory
 // for the duration of m.Run(), so every test in the calling package that
 // resolves daemon.DefaultPaths (directly, or indirectly through
@@ -57,7 +62,7 @@ func Guard(m *testing.M) int {
 	daemon.FallbackRoot = func() string { return root }
 	defer func() { daemon.FallbackRoot = prev }()
 
-	code := m.Run()
+	code := testhome.Run(m)
 
 	after := crealityDirs(realTemp)
 	if leaked := newEntries(before, after); len(leaked) > 0 {

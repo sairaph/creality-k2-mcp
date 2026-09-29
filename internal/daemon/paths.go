@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"github.com/sairaph/creality-k2-mcp/internal/userhome"
 	"os"
 	"path/filepath"
 )
@@ -81,7 +82,7 @@ var FallbackRoot = os.TempDir
 // can easily push "<home>/.creality-k2-mcp/daemon/daemon.sock" over the
 // limit.
 func DefaultPaths() (Paths, error) {
-	home, err := os.UserHomeDir()
+	home, err := userhome.Dir()
 	if err != nil {
 		return Paths{}, fmt.Errorf("daemon: resolve home directory: %w", err)
 	}
@@ -124,7 +125,7 @@ func shortHash(value string) string {
 // current user's real home directory, independent of DefaultPaths' own
 // short-path fallback (see recordingsSubdir).
 func DefaultRecordingsDir() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := userhome.Dir()
 	if err != nil {
 		return "", fmt.Errorf("daemon: resolve home directory: %w", err)
 	}

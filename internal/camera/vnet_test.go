@@ -32,6 +32,8 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/transport/v5/vnet"
 	"github.com/pion/webrtc/v4"
+
+	"github.com/sairaph/creality-k2-mcp/internal/userhome/testhome"
 )
 
 // testClientVNetIP and testPrinterVNetIP are the two virtual hosts on the
@@ -128,5 +130,5 @@ func TestMain(m *testing.M) {
 		), nil
 	}
 
-	os.Exit(m.Run())
+	os.Exit(testhome.Run(m))
 }

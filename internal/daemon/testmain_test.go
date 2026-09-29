@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"github.com/sairaph/creality-k2-mcp/internal/userhome/testhome"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,7 +38,7 @@ func TestMain(m *testing.M) {
 	// FallbackRoot restored explicitly here rather than via defer - a defer
 	// here would silently never run, which is exactly the kind of leftover
 	// temp directory this TestMain exists to prevent.
-	code := m.Run()
+	code := testhome.Run(m)
 	FallbackRoot = prev
 	os.RemoveAll(root)
 
