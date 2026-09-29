@@ -96,7 +96,8 @@ Remove-Item $oldTarget -Force -ErrorAction SilentlyContinue
 # the registry so %VAR% entries stay unexpanded (GetEnvironmentVariable and
 # SetEnvironmentVariable would expand them and write back a flattened REG_SZ).
 function Add-UserPathEntry([string]$Dir) {
-  $norm = { param($p) $p.Trim().TrimEnd('\') }
+  # Entries may be quoted ("C:\dir"): compare without the quotes.
+  $norm = { param($p) $p.Trim().Trim('"').TrimEnd('\') }
   $want = & $norm $Dir
   $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
   try {

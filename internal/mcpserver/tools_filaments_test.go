@@ -743,7 +743,7 @@ func TestGetFilaments_EditableFollowsThePrinterState(t *testing.T) {
 	cs, _, st := cfsSetup(t, true)
 	setPrinting(st)
 	text := replyText(call(t, cs, "get_filaments", nil))
-	for _, want := range []string{"edit_blocked:", "editable: false", "the printer does not allow an edit right now"} {
+	for _, want := range []string{"edit_blocked:", "editable: false"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("printing: missing %q:\n%s", want, text)
 		}

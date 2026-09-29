@@ -108,7 +108,8 @@ func TestEditBlockedMakesEverySlotNotEditableAndSaysWhich(t *testing.T) {
 		t.Fatalf("view = %+v", v)
 	}
 	for _, s := range v.Units[0].Slots {
-		if s.Editable || !strings.Contains(s.WhyNot, "the printer does not allow an edit right now: the printer is printing") {
+		// The printer-wide reason is stated once (EditBlocked), never per slot.
+		if s.Editable || s.WhyNot != "" {
 			t.Fatalf("slot = %+v", s)
 		}
 	}
@@ -127,4 +128,26 @@ func (boxsWS) BoxsInfo(ctx context.Context) (crealityws.BoxsInfo, error) {
 	one, zero := 1, 0
 	return crealityws.BoxsInfo{MaterialBoxs: []crealityws.MaterialBox{{ID: 1, Type: 0, State: 1, Materials: []crealityws.SlotMaterial{
 		{ID: 0, Type: "PLA", Name: "N", RFID: "1", Color: "#0ff0000", State: &one, Selected: &zero, EditStatus: &one}}}}, SameMaterialOK: true}, nil
+}
+
+type boxsSelectedWS struct{}
+
+func (boxsSelectedWS) BoxsInfo(ctx context.Context) (crealityws.BoxsInfo, error) {
+	one := 1
+	return crealityws.BoxsInfo{MaterialBoxs: []crealityws.MaterialBox{{ID: 1, Type: 0, State: 1, Materials: []crealityws.SlotMaterial{
+		{ID: 0, Type: "PLA", Name: "N", RFID: "1", Color: "#0ff0000", State: &one, Selected: &one, EditStatus: &one}}}}, SameMaterialOK: true}, nil
+}
+
+// A slot with its own slot-level reason keeps it while the printer is
+// blocked, and the printer-wide sentence is not repeated on it.
+func TestEditBlockedKeepsOnlySlotLevelReasonsPerSlot(t *testing.T) {
+	v := Read(context.Background(), boxsSelectedWS{}, printerstate.Snapshot{}, true, "the printer is printing")
+	s := v.Units[0].Slots[0]
+	if s.Editable || s.WhyNot == "" || strings.Contains(s.WhyNot, "printer is printing") || strings.Contains(s.WhyNot, "does not allow") {
+		t.Fatalf("slot = %+v", s)
+	}
+	text := Text(v)
+	if n := strings.Count(text, "the printer is printing"); n != 1 || !strings.Contains(text, "(not editable: "+s.WhyNot+")") {
+		t.Fatalf("printer-wide reason appears %d times, or the slot reason is missing:\n%s", n, text)
+	}
 }

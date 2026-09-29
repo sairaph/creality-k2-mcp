@@ -53,7 +53,11 @@ func Guard(m *testing.M) int {
 		fmt.Fprintf(os.Stderr, "daemontest: MkdirTemp: %v\n", err)
 		return 1
 	}
-	defer os.RemoveAll(root)
+	defer func() {
+		if err := os.RemoveAll(root); err != nil {
+			fmt.Fprintf(os.Stderr, "daemontest: remove %s: %v\n", root, err)
+		}
+	}()
 
 	realTemp := os.TempDir()
 	before := crealityDirs(realTemp)

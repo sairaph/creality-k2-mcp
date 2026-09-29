@@ -185,9 +185,10 @@ func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 		}
 	}
 
-	// Row 13: complete. Never observed live in this project
-	// (11-state-model.md section 1.1 row 13); gated like idle but flagged
-	// unverified (dev_docs/safety-architecture.md section 4.1). Like row 11
+	// Row 13: complete. Observed live (supervised print, 2026-09-29):
+	// print_stats complete with idle_timeout Ready, 9999 state 2, deviceState 0
+	// and the filament map reset to identity; gated like idle
+	// (11-state-model.md section 1.1 row 13). Like row 11
 	// (cancelled, settled), this also requires idle_timeout to be known and
 	// not "Printing": a "complete" print_stats value while idle_timeout still
 	// reports toolhead motion means another actor is running a manual command
@@ -201,7 +202,7 @@ func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 			Bucket:       BucketI,
 			Class:        ClassSafeToAct,
 			CFSConnected: cfsOK,
-			Reasons:      []string{"print_stats.state is complete and idle_timeout.state is not Printing (never observed live; treated as idle-equivalent, unverified)", cfsReason},
+			Reasons:      []string{"print_stats.state is complete and idle_timeout.state is not Printing (observed live after a finished print: idle_timeout Ready, 9999 state 2, deviceState 0)", cfsReason},
 		}
 	}
 

@@ -163,7 +163,7 @@ func TestRunFilamentsShowsTheStateAndWhyEditsAreBlocked(t *testing.T) {
 	}
 	out := stdout.String()
 	// The fake Moonraker answers offline, so no edit is allowed and the reason is shown.
-	for _, want := range []string{"State: offline", "Editing a slot is not possible right now", "the printer does not allow an edit right now", "not editable"} {
+	for _, want := range []string{"State: offline", "Editing a slot is not possible right now", "(not editable)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}

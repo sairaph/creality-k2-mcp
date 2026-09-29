@@ -227,13 +227,10 @@ func slotFrom(boxs crealityws.BoxsInfo, label string, m crealityws.SlotMaterial,
 	}
 	s.Editable, s.WhyNot = policy.SlotEditability(boxs, label)
 	if editBlocked != "" {
-		// The printer's current state forbids any edit; say which, and keep the
-		// slot's own reason too when it has one.
-		why := "the printer does not allow an edit right now: " + editBlocked
-		if s.WhyNot != "" {
-			why += "; also this slot: " + s.WhyNot
-		}
-		s.Editable, s.WhyNot = false, why
+		// The printer's current state forbids any edit. That reason is
+		// printer-wide and stated once (View.EditBlocked), so each slot keeps
+		// only its own slot-level reason, if it has one.
+		s.Editable = false
 	}
 	s.MoonrakerMaterialType, s.MoonrakerColor = moonrakerCodes(snap, label)
 	return s
@@ -347,7 +344,11 @@ func Text(v View) string {
 		}
 		edit := "editable"
 		if !s.Editable {
-			edit = "not editable: " + s.WhyNot
+			// A printer-wide block (v.EditBlocked) is stated once above, not per slot.
+			edit = "not editable"
+			if s.WhyNot != "" {
+				edit += ": " + s.WhyNot
+			}
 		}
 		fmt.Fprintf(&b, "  %-11s %s (%s)\n", s.Slot, desc, edit)
 	}

@@ -19,7 +19,8 @@ import (
 
 // appDirName matches internal/domain's own ~/.creality-k2-mcp, kept as a
 // separate literal here (rather than importing internal/domain) so this
-// package's only path dependency is the OS home directory.
+// package's only per-user path dependencies are internal/userhome (the shared
+// home resolver) and this name.
 const appDirName = ".creality-k2-mcp"
 
 // daemonSubdir is where the daemon's own lock, socket, pid file and log

@@ -19,7 +19,8 @@ import (
 // It points HOME, USERPROFILE and the other per-user environment variables
 // (APPDATA, LOCALAPPDATA, XDG_*) at a fresh temp directory for the whole
 // package run and removes it afterwards, and records the real home in
-// userhome.RealHomeEnv so userhome.Dir can refuse to resolve it. Tests that
+// userhome.RealHomeEnv (overwriting any value already in the environment) so
+// userhome.Dir can refuse to resolve it. Tests that
 // need their own home keep using t.Setenv.
 func Run(m *testing.M) int {
 	return RunFunc(m.Run)
@@ -27,11 +28,10 @@ func Run(m *testing.M) int {
 
 // RunFunc is Run for a TestMain that wraps m.Run in more setup (daemontest.Guard).
 func RunFunc(run func() int) int {
-	if os.Getenv(userhome.RealHomeEnv) != "" {
-		// Already isolated by an enclosing TestMain in this process tree.
-		return run()
-	}
-	realHome, err := os.UserHomeDir()
+	// Always isolate and always recompute the real home from the OS account
+	// (never from HOME or a marker inherited from the environment, which a
+	// stale value or an enclosing test process could have left behind).
+	realHome, err := userhome.RealHome()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "testhome: resolve real home: %v\n", err)
 		return 1
@@ -43,7 +43,11 @@ func RunFunc(run func() int) int {
 		fmt.Fprintf(os.Stderr, "testhome: MkdirTemp: %v\n", err)
 		return 1
 	}
-	defer os.RemoveAll(root)
+	defer func() {
+		if err := os.RemoveAll(root); err != nil {
+			fmt.Fprintf(os.Stderr, "testhome: remove %s: %v\n", root, err)
+		}
+	}()
 
 	env := map[string]string{
 		userhome.RealHomeEnv: realHome,

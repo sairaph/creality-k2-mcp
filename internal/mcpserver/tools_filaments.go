@@ -26,9 +26,10 @@ func registerFilamentTools(s *Server) {
 			"model, temperature and humidity, and per slot (T1A to T4D, side_spool) the stored definition: status " +
 			"(defined = a definition is stored and it is not RFID, rfid = an RFID-tagged spool, undefined = no definition, unknown), brand, name, " +
 			"material, colour, the nozzle temperature range, whether the slot is selected at the filament hub, and " +
-			"whether set_filament_definition can edit it right now (editable, with why_not when not: slot-level checks plus " +
-			"the printer's current state, so a printing printer, a busy CFS or a print start in flight shows editable false " +
-			"and says which; edit_blocked names the state reason). It also shows " +
+			"whether set_filament_definition can edit it right now (editable; why_not appears only for a slot-level reason: " +
+			"an RFID spool, an undefined slot, a slot being written, one selected at the hub. A printer-wide reason, " +
+			"a printing printer, a busy CFS, a print start in flight or control off, makes every slot editable false and is " +
+			"stated once in edit_blocked, not repeated per slot). It also shows " +
 			"the printer's own refill_groups (slots it treats as interchangeable for auto-refill), auto_refill, and " +
 			"the CFS state (idle, busy, in_print, error or unknown) in the cfs block of the frontmatter. The status " +
 			"is the printer's stored definition, not a sensor: whether filament is physically loaded in a slot " +

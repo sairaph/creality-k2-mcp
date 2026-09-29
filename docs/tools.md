@@ -253,8 +253,10 @@ only.
   applies (an RFID spool, an undefined or not-ready slot, a slot being written, the
   slot selected at the hub; the side spool is editable, verified on hardware) with the printer's
   current state: while it is printing, the CFS is busy, a print start is in flight
-  or control is off, every slot shows `editable: false` and `why_not` says which
-  (`edit_blocked` carries the state reason).
+  or control is off, every slot shows `editable: false` and `edit_blocked` says
+  why, once. `why_not` carries only a slot's own (slot-level) reason and is
+  omitted when the slot has none; the printer-wide reason is not repeated on
+  every slot, and the text body lists such a slot as just "(not editable)".
 
 ### `list_filament_catalog`
 
