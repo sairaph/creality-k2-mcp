@@ -47,6 +47,12 @@ type WS9999Client interface {
 
 	SetLight(ctx context.Context, on bool) (confirmed bool, err error)
 
+	// SetSpeedMode sends {"speedMode":1|0} on port 9999 (Silent on or off) and
+	// nothing else: set_speed_preset sends the speed factor itself through the
+	// Moonraker M220 template (plan-v0.3.0.md 2a.2). sent means the frame was
+	// written; there is no acknowledgement.
+	SetSpeedMode(ctx context.Context, on bool) (sent bool, err error)
+
 	BoxsInfo(ctx context.Context) (crealityws.BoxsInfo, error)
 	Materials(ctx context.Context) ([]crealityws.CatalogEntry, error)
 	GcodeFiles(ctx context.Context) ([]crealityws.GcodeFileInfo, error)

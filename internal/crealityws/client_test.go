@@ -187,6 +187,7 @@ func TestExportedAPI(t *testing.T) {
 		"StartCFSPrint":   true,
 		"StartSpoolPrint": true,
 		"Stop":            true,
+		"SetSpeedMode":    true,
 	}
 
 	got := make(map[string]bool, typ.NumMethod())
@@ -201,7 +202,7 @@ func TestExportedAPI(t *testing.T) {
 	}
 	for name := range got {
 		if !want[name] {
-			t.Errorf("Client has unexpected exported method %s (crealityws must expose no write method besides SetLight, ModifyMaterial, StartCFSPrint and StartSpoolPrint)", name)
+			t.Errorf("Client has unexpected exported method %s (crealityws must expose no write method besides SetLight, ModifyMaterial, StartCFSPrint, StartSpoolPrint, Stop and SetSpeedMode)", name)
 		}
 	}
 }

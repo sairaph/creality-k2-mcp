@@ -482,3 +482,38 @@ func TestBuildStateBlock_CFSBlockOnlyWhenConnected(t *testing.T) {
 		t.Fatalf("no CFS: cfs=%+v, want nil", b.CFS)
 	}
 }
+
+// A non-identity map on its own is a stale-able signal (an aborted print may leave
+// it): it may still say "preparing" for an idle printer, but a genuine homing or
+// calibration must not be relabelled as the self-test's own. A live signal (the
+// self-test progress) does.
+func TestStartWindowOverMotionNeedsALiveSignal(t *testing.T) {
+	staleMap := func() Snapshot {
+		s := cfsIdle(t)
+		s.PrintStats.State = "complete"
+		s.Box.Map["T1B"] = "T1C"
+		return s
+	}
+	homing := staleMap()
+	homing.MotorControl.IsHoming = boolPtr(true)
+	if d := DeriveActivityState(homing, nil); d.State != StateHoming || d.Bucket != BucketB || d.StartWindow {
+		t.Fatalf("stale map + homing: %s/%s window %v, want a genuine homing", d.State, d.Bucket, d.StartWindow)
+	}
+	cal := staleMap()
+	cal.VirtualSDCard.BedMeshCalibrateState = boolPtr(true)
+	if d := DeriveActivityState(cal, nil); d.State != StateCalibrating || d.StartWindow {
+		t.Fatalf("stale map + calibrating: %s window %v", d.State, d.StartWindow)
+	}
+	// The map alone (no motion) still derives preparing, as before.
+	if d := DeriveActivityState(staleMap(), nil); d.State != StatePreparing {
+		t.Fatalf("stale map alone: %s, want preparing as before", d.State)
+	}
+	// With the live self-test progress it is the window, naming the motion.
+	live := staleMap()
+	live.WS9999.WithSelfTest = crealityws.Int{Value: 40, Present: true}
+	live.MotorControl.IsHoming = boolPtr(true)
+	d := DeriveActivityState(live, nil)
+	if d.State != StatePreparing || !d.StartWindow || !hasReason(d.Reasons, "self-test homing") {
+		t.Fatalf("live signal + homing: %s window %v %v", d.State, d.StartWindow, d.Reasons)
+	}
+}

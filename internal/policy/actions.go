@@ -172,6 +172,9 @@ func (p *Policy) evaluateParams(ctx context.Context, deps Deps, printer domain.P
 	case ActionSetFanSpeed:
 		return spec.Confirmation, checkFan(snap, derived, params, settings)
 
+	case ActionSetSpeedPreset:
+		return spec.Confirmation, checkPresetName(params.Preset)
+
 	case ActionSetSpeedFactor:
 		if !domain.WithinRange(params.Percent, settings.Bands.SpeedFactorMinPercent, settings.Bands.SpeedFactorMaxPercent) {
 			return spec.Confirmation, &Error{Code: CodeInvalidInput, Message: bandMessage("speed factor", params.Percent, settings.Bands.SpeedFactorMinPercent, settings.Bands.SpeedFactorMaxPercent)}
@@ -434,15 +437,70 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 		defer locks.pl.setPending(nil)
 	}
 
+	// While Silent is on the firmware caps every fan at half its range (M106,
+	// gcode_macro.cfg), so a fan request above 50% is applied as 50%: settle
+	// against the capped value and say so, instead of a false unconfirmed
+	// (plan 2a.8).
+	settleParams := params
+	var extraEffects []string
+	if spec.Name == ActionSetFanSpeed && derived.Qmode == printerstate.QmodeOn {
+		extraEffects = append(extraEffects, "Silent mode is on: it caps all fans (part, case, auxiliary) at half their range (50%), so a request above 50% is applied as 50%")
+		if params.FanPercent > 50 {
+			settleParams.FanPercent = 50
+		}
+	} else if spec.Name == ActionSetFanSpeed && derived.Qmode == printerstate.QmodeUnknown && params.FanPercent > 50 {
+		extraEffects = append(extraEffects, "the Silent mode state could not be read: if Silent is on, the firmware caps every fan at 50%, and this request above 50% will not read back as requested")
+	}
+
+	// A possibly-queued earlier write of the same setting (queued.go) is still
+	// ahead of this one in Moonraker's queue: say so (this command runs after it).
+	kind := settingKind(spec.Name, params)
+	if isTemplateAction(spec.Name) {
+		if q := locks.pl.outstandingQueued(kind, snap); q != nil {
+			extraEffects = append(extraEffects, queuedNote(q))
+		}
+	}
+
 	sendErr := dispatchSend(ctx, deps, spec.Name, params)
 	accepted := sendErr == nil
+	if sendErr == nil && isTemplateAction(spec.Name) {
+		locks.pl.clearQueuedKind(kind) // FIFO: an answered write proves the earlier one ran
+	}
 	if spec.Name == ActionResumePrint || spec.Name == ActionCancelPrint {
 		// The pause record is single-use: once a resume or cancel was sent it
 		// must never match a later pause (plan 8a.5).
 		locks.pl.setPauseRec(nil)
 	}
 
-	afterSnap, afterDerived, confirmed := p.pollUntilSettle(ctx, deps, printer, locks, pendingKind, spec.SettleTimeout, settleFuncFor(spec.Name, params))
+	settleFn := settleFuncFor(spec.Name, settleParams)
+	afterSnap, afterDerived, confirmed := p.pollUntilSettle(ctx, deps, printer, locks, pendingKind, spec.SettleTimeout, settleFn)
+	// A template write that errored without an HTTP answer (a timeout) may be
+	// queued behind a running macro and run later. It is never retried; the settle
+	// poll decides. Confirmed after such an error means the printer ran it when it
+	// got to it: accepted, unless the value already matched before the send (then
+	// whether it ran is not known).
+	if isTemplateAction(spec.Name) && deliveryUnknown(sendErr) {
+		switch {
+		case confirmed && !settleFn(snap, derived):
+			accepted = true
+			extraEffects = append(extraEffects, queuedRanNote)
+		case confirmed:
+			// The value already held before the send: the read cannot show that this
+			// command ran.
+			extraEffects = append(extraEffects, neutralConfirmNote)
+		default:
+			extraEffects = append(extraEffects, queuedPendingNote)
+			// Remember it: a later call must not skip a write while this one is queued.
+			settleCopy := settleParams
+			locks.pl.setQueuedWrite(&queuedWrite{
+				kind: kind, action: spec.Name, target: writeTarget(spec.Name, params), issuedAt: time.Now(),
+				job: printerstate.JobIdentityFrom(snap),
+				applied: func(s printerstate.Snapshot) bool {
+					return settleFuncFor(spec.Name, settleCopy)(s, printerstate.Derived{})
+				},
+			})
+		}
+	}
 	// A cancel whose HTTP call failed with a transport error or timeout (Moonraker
 	// answers only after the macro) but whose effect the settle poll then confirmed
 	// did reach the printer: count it as accepted. Never for an HTTP status
@@ -456,7 +514,7 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 		Action:   spec.Name,
 		Accepted: accepted,
 		Effect:   effectString(confirmed),
-		Effects:  withCFSNote(spec.Effects, spec.Name, derived),
+		Effects:  append(withCFSNote(spec.Effects, spec.Name, derived), extraEffects...),
 		Commands: spec.Commands,
 		Before:   before,
 		After:    printerstate.BuildStateBlock(afterSnap, afterDerived, nil),
@@ -469,6 +527,16 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 		}
 	}
 	return result, nil
+}
+
+// isTemplateAction lists the actions sent as one Moonraker gcode-script template.
+func isTemplateAction(name ActionName) bool {
+	switch name {
+	case ActionSetNozzleTemperature, ActionSetBedTemperature, ActionSetFanSpeed, ActionSetSpeedFactor,
+		ActionSetFlowFactor, ActionExcludeObject:
+		return true
+	}
+	return false
 }
 
 // dispatchSend performs the one write call an action makes, for every

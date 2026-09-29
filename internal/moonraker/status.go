@@ -415,7 +415,47 @@ type CustomMacro struct {
 	DefaultExtruderTemp float64 `json:"default_extruder_temp"`
 	DefaultBedTemp      float64 `json:"default_bed_temp"`
 	G28ExtTemp          float64 `json:"g28_ext_temp"`
-	QmodeFlag           float64 `json:"qmode_flag"`
+	// QmodeFlag is Creality's Silent-mode flag (custom_macro.py: SET_QMODE_FLAG).
+	// It must distinguish "not reported" from a genuine 0 (Silent off); nil must
+	// fail closed, never be read as "Silent is off" (plan-v0.3.0.md 2a.1).
+	QmodeFlag *float64 `json:"qmode_flag"`
+}
+
+// QmodeMacro is Creality's "gcode_macro Qmode" object. Flag is the macro's own
+// copy of the Silent-mode state; the macro sets it and calls SET_QMODE_FLAG
+// as two separate lines, so an aborted macro can leave the two disagreeing.
+// printerstate treats any disagreement, or a missing value, as unknown (plan
+// 2a.1).
+type QmodeMacro struct {
+	Flag *float64 `json:"flag"`
+	// SpeedFactor is the speed factor the macro captured when Silent was entered
+	// (a fraction, 1.0 = 100%); Qmode_exit restores it with M220. Only used to tell
+	// whether a read that shows the target can be explained by the exit itself.
+	SpeedFactor *float64 `json:"speed_factor"`
+}
+
+// DecodeQmodeMacro decodes the fields independently: flag is strict (a value that
+// is not a number is a decode error, so Silent reads unknown), while an unreadable
+// speed_factor only leaves SpeedFactor nil, which merely disables the evidence
+// promotion for a timed-out M220 and never drops the flag.
+func DecodeQmodeMacro(raw json.RawMessage) (QmodeMacro, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return QmodeMacro{}, err
+	}
+	var v QmodeMacro
+	if f, ok := fields["flag"]; ok {
+		if err := json.Unmarshal(f, &v.Flag); err != nil {
+			return QmodeMacro{}, err
+		}
+	}
+	if s, ok := fields["speed_factor"]; ok {
+		var sf *float64
+		if err := json.Unmarshal(s, &sf); err == nil {
+			v.SpeedFactor = sf
+		}
+	}
+	return v, nil
 }
 
 func DecodeCustomMacro(raw json.RawMessage) (CustomMacro, error) {

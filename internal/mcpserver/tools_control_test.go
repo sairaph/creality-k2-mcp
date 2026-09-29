@@ -54,6 +54,12 @@ type fakeControlState struct {
 
 	serverInfoErr error
 
+	// silent is Creality's Silent mode (Qmode) flag, savedFactor the factor it
+	// captured on entry; qmodeOmit drops both Moonraker sources (plan-v0.3.0.md).
+	silent, qmodeOmit bool
+	savedFactor       float64
+	speedFrames       []bool
+
 	// hostname is what PrinterInfo answers with (review backlog item 24):
 	// controlDeps sets it to the same value as the printer's own persisted
 	// Hostname (controlTestPrinter), so every control test's identity
@@ -129,7 +135,16 @@ func (st *fakeControlState) queryObjects() map[string]json.RawMessage {
 	set("display_status", moonraker.DisplayStatus{})
 
 	notCalibrating := 0
-	set("custom_macro", moonraker.CustomMacro{LevelingCalibration: &notCalibrating})
+	cm := moonraker.CustomMacro{LevelingCalibration: &notCalibrating}
+	if !st.qmodeOmit {
+		flag := 0.0
+		if st.silent {
+			flag = 1
+		}
+		cm.QmodeFlag = &flag
+		set("gcode_macro Qmode", moonraker.QmodeMacro{Flag: &flag})
+	}
+	set("custom_macro", cm)
 
 	speedFactor, extrudeFactor := st.speedFactor, st.extrudeFactor
 	set("gcode_move", moonraker.GCodeMove{SpeedFactor: &speedFactor, ExtrudeFactor: &extrudeFactor})
@@ -312,6 +327,22 @@ type fakeWS9999Control struct{ st *fakeControlState }
 
 func (f *fakeWS9999Control) ReadStatus(ctx context.Context) (crealityws.Status, error) {
 	return crealityws.Status{}, nil
+}
+
+// SetSpeedMode follows the firmware's Qmode / Qmode_exit (only in a print):
+// entering captures the speed factor and sets 50%, leaving restores it.
+func (f *fakeWS9999Control) SetSpeedMode(ctx context.Context, on bool) (bool, error) {
+	f.st.mu.Lock()
+	defer f.st.mu.Unlock()
+	f.st.speedFrames = append(f.st.speedFrames, on)
+	inPrint := f.st.printStatsState == "printing" || f.st.printStatsState == "paused"
+	switch {
+	case on && inPrint && !f.st.silent:
+		f.st.silent, f.st.savedFactor, f.st.speedFactor = true, f.st.speedFactor, 0.5
+	case !on && inPrint && f.st.silent:
+		f.st.silent, f.st.speedFactor = false, f.st.savedFactor
+	}
+	return true, nil
 }
 
 func (f *fakeWS9999Control) SetLight(ctx context.Context, on bool) (bool, error) {

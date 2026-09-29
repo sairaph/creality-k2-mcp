@@ -62,8 +62,15 @@ type Status struct {
 	MaterialStatus Int
 	CfsConnect     Int
 	LightSw        Int
-	Err            StatusErr
-	PrintID        Str
+	// SpeedMode is the printer's speedMode (1 = Silent, 0 otherwise) and
+	// CurFeedrate its curFeedratePct as optional Ints: the speed-preset read-back
+	// (plan-v0.3.0.md 2a.5) must tell "absent" from a genuine 0. Not in
+	// MissingSafetyFields: a printer that never reports them just contributes no
+	// corroboration.
+	SpeedMode   Int
+	CurFeedrate Int
+	Err         StatusErr
+	PrintID     Str
 
 	// WithSelfTest and EnableSelfTest are the print-start self-test progress
 	// (100 = finished or never started) and the printer-side self-test
@@ -152,6 +159,8 @@ func buildStatus(raw map[string]any) Status {
 	s.MaterialStatus = asOptInt(raw["materialStatus"])
 	s.CfsConnect = asOptInt(raw["cfsConnect"])
 	s.LightSw = asOptInt(raw["lightSw"])
+	s.SpeedMode = asOptInt(raw["speedMode"])
+	s.CurFeedrate = asOptInt(raw["curFeedratePct"])
 	s.Err = asStatusErr(raw["err"])
 	s.PrintID = asOptString(raw["printId"])
 	s.WithSelfTest = asOptInt(raw["withSelfTest"])

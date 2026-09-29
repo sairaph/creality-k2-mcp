@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
@@ -26,10 +25,11 @@ type Progress struct {
 }
 
 // ProgressFunc is called as hosts finish their dial check, from whichever
-// scan worker goroutine finished. It may be called concurrently from
-// multiple goroutines; a caller that touches shared state (a UI model, a
-// counter) must synchronize itself, for example by sending on a channel
-// rather than mutating state directly.
+// scan worker goroutine finished. Calls are serialized and in order: each one
+// carries a Scanned that is exactly one more than the previous call's, so it never
+// goes backwards and the last call equals the final count. Because they are
+// serialized, a callback must return promptly (send on a channel rather than
+// doing work), or it holds up the workers waiting to report.
 type ProgressFunc func(Progress)
 
 // ScanOptions configures Scan. The zero value uses the plan-v0.1.0.md
@@ -115,23 +115,30 @@ func Scan(ctx context.Context, hosts []string, opts ScanOptions) Report {
 	var (
 		mu      sync.Mutex
 		results []Result
-		scanned int32
-		wg      sync.WaitGroup
+		scanned int
+		// pubMu makes "count this host, snapshot the counts, call Progress" one
+		// critical section. Before, the increment and the snapshot were separate
+		// atomic steps and the callbacks ran concurrently, so a worker that had
+		// counted 5 could deliver its callback before a worker that had counted 4
+		// (Scanned went backwards, and the last callback could carry a stale count).
+		pubMu sync.Mutex
+		wg    sync.WaitGroup
 	)
 
 	launched := 0
-	report := func() {
+	// finished counts one more host as scanned and reports it, atomically with
+	// respect to every other finished host.
+	finished := func() {
+		pubMu.Lock()
+		defer pubMu.Unlock()
+		scanned++
 		if opts.Progress == nil {
 			return
 		}
 		mu.Lock()
 		found := len(results)
 		mu.Unlock()
-		opts.Progress(Progress{
-			Scanned: int(atomic.LoadInt32(&scanned)),
-			Total:   total,
-			Found:   found,
-		})
+		opts.Progress(Progress{Scanned: scanned, Total: total, Found: found})
 	}
 
 hostLoop:
@@ -154,8 +161,7 @@ hostLoop:
 				results = append(results, res)
 				mu.Unlock()
 			}
-			atomic.AddInt32(&scanned, 1)
-			report()
+			finished()
 		}()
 	}
 	wg.Wait()
@@ -166,7 +172,7 @@ hostLoop:
 	return Report{
 		Results: results,
 		Partial: partial,
-		Scanned: int(scanned),
+		Scanned: scanned,
 		Total:   total,
 	}
 }

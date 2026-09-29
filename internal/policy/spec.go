@@ -185,6 +185,19 @@ var specs = map[ActionName]actionSpec{
 		Templates:      []moonraker.Template{moonraker.TemplateM220},
 		SettleTimeout:  10 * time.Second,
 	},
+	ActionSetSpeedPreset: {
+		Name:           ActionSetSpeedPreset,
+		AllowedBuckets: bucketSet(printerstate.BucketP),
+		CFS:            cfsKnownNoError,
+		Confirmation:   ConfirmationNone,
+		Effects: []string{
+			"silent: " + silentEffect,
+			"stable, standard, ultrafast: the speed factor becomes 50%, 100% or 125% (runtime only, reset by START_PRINT/END_PRINT); leaving Silent first restores what Silent changed",
+		},
+		Commands:      []string{"speedMode (port 9999)", "M220"},
+		Templates:     []moonraker.Template{moonraker.TemplateM220},
+		SettleTimeout: speedSettleCap,
+	},
 	ActionSetFlowFactor: {
 		Name:           ActionSetFlowFactor,
 		AllowedBuckets: bucketSet(printerstate.BucketP),

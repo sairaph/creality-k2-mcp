@@ -179,6 +179,10 @@ func TestScanProgressReportsMonotonicScannedCount(t *testing.T) {
 			if p.Scanned < lastScanned {
 				t.Errorf("Progress.Scanned went backwards: %d then %d", lastScanned, p.Scanned)
 			}
+			// Calls are serialized and in order: every call is exactly one more.
+			if p.Scanned != lastScanned+1 {
+				t.Errorf("Progress.Scanned = %d after %d, want the next count", p.Scanned, lastScanned)
+			}
 			lastScanned = p.Scanned
 			if p.Total != len(hosts) {
 				t.Errorf("Progress.Total = %d, want %d", p.Total, len(hosts))
@@ -189,8 +193,8 @@ func TestScanProgressReportsMonotonicScannedCount(t *testing.T) {
 	if calls != len(hosts) {
 		t.Fatalf("Progress was called %d times, want %d (once per host)", calls, len(hosts))
 	}
-	if lastScanned != rep.Scanned {
-		t.Fatalf("final Progress.Scanned = %d, want %d", lastScanned, rep.Scanned)
+	if lastScanned != rep.Scanned || lastScanned != len(hosts) {
+		t.Fatalf("final Progress.Scanned = %d, want %d (report %d)", lastScanned, len(hosts), rep.Scanned)
 	}
 }
 

@@ -140,6 +140,8 @@ func cfsEffectNote(name ActionName, derived printerstate.Derived) string {
 	switch name {
 	case ActionSetFanSpeed, ActionSetSpeedFactor:
 		return "a CFS is connected: on a CFS print the next filament change can reset this"
+	case ActionSetSpeedPreset:
+		return "a CFS is connected: a filament change runs M220 S100, so the speed factor returns to 100% even while Silent stays on; Silent's acceleration clamp stays in force (the swap sets acceleration 1000, inside the clamp, and 2500 afterwards), velocity stays 150 unless the file sets it, the part fan goes to 100% during the purge (Silent does not cap it) and the nozzle goes to 265 then 270 C for the flush (verified in a supervised print)"
 	}
 	return ""
 }

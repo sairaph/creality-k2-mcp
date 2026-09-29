@@ -168,6 +168,12 @@ type Derived struct {
 	// stop is verified, so the actions list needs to know.
 	StartWindow bool
 
+	// Qmode is the Silent-mode (Creality Qmode macro) state: On or Off only when
+	// custom_macro.qmode_flag and gcode_macro Qmode.flag are both present and
+	// agree, otherwise Unknown (plan-v0.3.0.md 2a.1). The zero value is Unknown
+	// (fail closed); DeriveActivityState sets it on every return path.
+	Qmode QmodeState
+
 	// PauseRecorded is set by internal/policy only: this process holds a clean
 	// pause record for the current job, the precondition of resume_print with a
 	// CFS connected. Plain DeriveActivityState leaves it false.

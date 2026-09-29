@@ -20,6 +20,8 @@
 //   - StartCFSPrint: {"colorMatch":{...}} then {"multiColorPrint":{...}}
 //   - StartSpoolPrint: {"opGcodeFile":"printprt:<path>","enableSelfTest":n}
 //   - Stop: {"stop":1}, used only to cancel during the print-start window
+//   - SetSpeedMode: {"speedMode":1} (Silent) or {"speedMode":0}, used only by
+//     set_speed_preset (the speed factor itself goes through Moonraker)
 //
 // The typed reads are BoxsInfo, Materials and GcodeFiles (plan-v0.2.0.md
 // section 1).

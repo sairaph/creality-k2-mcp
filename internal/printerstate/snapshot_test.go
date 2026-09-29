@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,5 +214,29 @@ func TestTake_HistoryHeadPicksGreatestStartTime(t *testing.T) {
 	job, ok := historyHead(snap.History)
 	if !ok || job.JobID != "newest" {
 		t.Fatalf("historyHead = %+v, ok=%v, want job_id=newest", job, ok)
+	}
+}
+
+// Snapshot.Taken must carry the monotonic clock reading (no .UTC(), .Round() or
+// serialisation), because every in-flight record (start, pause, resume, pending
+// action) compares against it with time.Now() values: a wall-clock step (WSL2
+// drift, NTP) must not change what "before" or "after" means. The state block
+// still renders it in UTC.
+func TestTakenKeepsTheMonotonicReading(t *testing.T) {
+	deps := Deps{
+		Moonraker: &fakeMoonrakerClient{serverInfo: idleServerInfo(), objects: idleObjectsRaw(t)},
+		WS9999:    &fakeWS9999Client{status: idleWS9999Status()},
+	}
+	before := time.Now()
+	snap := Take(context.Background(), deps, domain.Printer{})
+	if !strings.Contains(snap.Taken.String(), "m=") {
+		t.Fatalf("Taken = %q carries no monotonic reading", snap.Taken.String())
+	}
+	if snap.Taken.Before(before) {
+		t.Fatalf("Taken %v is before the call started %v", snap.Taken, before)
+	}
+	block := BuildStateBlock(snap, Derived{}, nil)
+	if !strings.HasSuffix(block.SnapshotTime, "Z") {
+		t.Errorf("snapshot_time = %q, want UTC", block.SnapshotTime)
 	}
 }

@@ -727,3 +727,26 @@ func TestBoxAnyUnitConnected(t *testing.T) {
 		t.Fatal("T2 connect must count")
 	}
 }
+
+// R3: the Qmode macro's fields decode independently. flag is strict; an unreadable
+// speed_factor never drops it.
+func TestDecodeQmodeMacro_FieldsAreIndependent(t *testing.T) {
+	v, err := DecodeQmodeMacro(json.RawMessage(`{"flag":1,"speed_factor":"oops"}`))
+	if err != nil || v.Flag == nil || *v.Flag != 1 || v.SpeedFactor != nil {
+		t.Fatalf("bad speed_factor: %+v %v", v, err)
+	}
+	v, err = DecodeQmodeMacro(json.RawMessage(`{"flag":0,"speed_factor":1.25}`))
+	if err != nil || v.Flag == nil || *v.Flag != 0 || v.SpeedFactor == nil || *v.SpeedFactor != 1.25 {
+		t.Fatalf("good values: %+v %v", v, err)
+	}
+	v, err = DecodeQmodeMacro(json.RawMessage(`{"flag":0}`))
+	if err != nil || v.SpeedFactor != nil {
+		t.Fatalf("missing speed_factor: %+v %v", v, err)
+	}
+	if _, err := DecodeQmodeMacro(json.RawMessage(`{"flag":"x"}`)); err == nil {
+		t.Fatal("a non-numeric flag must stay a decode error (Silent reads unknown)")
+	}
+	if _, err := DecodeQmodeMacro(json.RawMessage(`[1]`)); err == nil {
+		t.Fatal("a non-object must be an error")
+	}
+}

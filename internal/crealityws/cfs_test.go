@@ -715,3 +715,50 @@ func TestMaterialEditConfirms_SideSpoolNeedsNoSameMaterial(t *testing.T) {
 		t.Fatal("a CFS slot must still require same_material")
 	}
 }
+
+// SetSpeedMode sends exactly one fixed-shape frame per call and never a
+// setFeedratePct (plan-v0.3.0.md 2a.2).
+func TestSetSpeedMode_Frames(t *testing.T) {
+	for _, tc := range []struct {
+		on   bool
+		mode float64
+	}{{true, 1}, {false, 0}} {
+		shrinkLinger(t, 10*time.Millisecond)
+		got := make(chan map[string]any, 4)
+		host, port := startFakeServer(t, func(t *testing.T, conn *websocket.Conn) {
+			ctx := context.Background()
+			got <- readClientJSON(t, ctx, conn)
+			_, _, _ = conn.Read(ctx)
+		})
+		sent, err := New(host, port).SetSpeedMode(context.Background(), tc.on)
+		if err != nil || !sent {
+			t.Fatalf("on=%v: sent=%v err=%v", tc.on, sent, err)
+		}
+		want := map[string]any{"method": "set", "params": map[string]any{"speedMode": tc.mode}}
+		if g := <-got; !reflect.DeepEqual(g, want) {
+			t.Errorf("on=%v: frame = %v\nwant %v", tc.on, g, want)
+		}
+		select {
+		case extra := <-got:
+			t.Errorf("on=%v: unexpected second frame %v", tc.on, extra)
+		default:
+		}
+	}
+}
+
+func TestSetSpeedMode_ConnectFailureIsNotSent(t *testing.T) {
+	sent, err := New("127.0.0.1", 1).SetSpeedMode(context.Background(), true)
+	if err == nil || sent {
+		t.Fatalf("sent=%v err=%v", sent, err)
+	}
+}
+
+func TestBuildStatus_SpeedModeAndFeedrateArePresenceAware(t *testing.T) {
+	s := buildStatus(map[string]any{"speedMode": float64(1), "curFeedratePct": float64(50)})
+	if !s.SpeedMode.Present || s.SpeedMode.Value != 1 || !s.CurFeedrate.Present || s.CurFeedrate.Value != 50 {
+		t.Fatalf("status = %+v", s)
+	}
+	if e := buildStatus(map[string]any{}); e.SpeedMode.Present || e.CurFeedrate.Present {
+		t.Fatalf("absent fields reported present: %+v", e)
+	}
+}

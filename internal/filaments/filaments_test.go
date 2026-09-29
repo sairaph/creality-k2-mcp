@@ -96,9 +96,36 @@ func TestCatalogWritableFollowsStateAndLiveCap(t *testing.T) {
 	}
 	got, _ = Catalog(context.Background(), r, "", "", "the printer is printing", nil)
 	for _, e := range got {
-		if e.Writable || !strings.Contains(e.WhyNot, "does not allow an edit right now: the printer is printing") {
+		// The printer-wide reason is stated once by the caller, never per entry.
+		if e.Writable || strings.Contains(e.WhyNot, "printer is printing") || strings.Contains(e.WhyNot, "does not allow") {
 			t.Fatalf("blocked state: %+v", e)
 		}
+	}
+}
+
+// While the printer is blocked, an entry with its own problem (a 0-0 range)
+// keeps that entry-level reason; the printer-wide reason is not added to it.
+func TestCatalogBlockedKeepsOnlyEntryLevelReasons(t *testing.T) {
+	pa := 0.04
+	r := catReader{items: []crealityws.CatalogEntry{
+		{ID: "1", Brand: "A", Name: "Fine", Type: "PLA", MinTemp: 190, MaxTemp: 240, PressureAdvance: &pa},
+		{ID: "2", Brand: "A", Name: "NoRange", Type: "PLA", MinTemp: 0, MaxTemp: 0, PressureAdvance: &pa},
+	}}
+	got, err := Catalog(context.Background(), r, "", "", "the printer is printing", nil)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("catalog = %+v, %v", got, err)
+	}
+	byID := map[string]CatalogEntry{got[0].ID: got[0], got[1].ID: got[1]}
+	for _, e := range got {
+		if e.Writable || strings.Contains(e.WhyNot, "printer is printing") {
+			t.Errorf("entry %+v", e)
+		}
+	}
+	if byID["1"].WhyNot != "" {
+		t.Errorf("an entry with no entry-level problem carries why_not %q", byID["1"].WhyNot)
+	}
+	if byID["2"].WhyNot == "" {
+		t.Errorf("the 0-0 range entry lost its own reason")
 	}
 }
 

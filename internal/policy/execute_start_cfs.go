@@ -447,7 +447,11 @@ func (p *Policy) sendStartCFS(ctx context.Context, deps Deps, printer domain.Pri
 	commands := []string{}
 	if needsReset {
 		if err := deps.Moonraker.RunTemplate(ctx, moonraker.TemplateM221, map[string]string{"percent": "100"}); err != nil {
-			return Result{}, &Error{Action: spec.Name, Code: CodeUnavailable, Message: "could not reset the flow factor to 100 before the start: " + err.Error() + "; nothing was sent to the CFS"}
+			msg := "could not reset the flow factor to 100 before the start: " + err.Error() + "; nothing was sent to the CFS"
+			if deliveryUnknown(err) {
+				msg += ". The reset was not retried and " + queuedPendingNote
+			}
+			return Result{}, &Error{Action: spec.Name, Code: CodeUnavailable, Message: msg}
 		}
 		commands = append(commands, "M221 S100")
 	}
@@ -459,6 +463,8 @@ func (p *Policy) sendStartCFS(ctx context.Context, deps Deps, printer domain.Pri
 		if err := deps.Moonraker.RunTemplate(ctx, moonraker.TemplateM221, map[string]string{"percent": want}); err == nil {
 			result.StartPrintFlowRestored = prevFlowPercent
 			result.Effects = append(result.Effects, "the flow factor was restored to "+want+"% (it had been reset to 100% for the start)")
+		} else if deliveryUnknown(err) {
+			result.Effects = append(result.Effects, "the flow factor restore to "+want+"% got no answer and was not retried: it may be queued behind a running macro and run when the printer gets to it; check get_printer_status")
 		} else {
 			result.Effects = append(result.Effects, "the flow factor could NOT be restored to "+want+"%: it is still 100%; set it back on the printer if you need it")
 		}

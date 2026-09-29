@@ -752,7 +752,9 @@ func TestGetFilaments_EditableFollowsThePrinterState(t *testing.T) {
 		t.Errorf("printing: still promises an edit:\n%s", text)
 	}
 	cat := replyText(call(t, cs, "list_filament_catalog", nil))
-	if strings.Contains(cat, "writable: true") || !strings.Contains(cat, "the printer does not allow an edit right now") {
+	// The block is stated once (edit_blocked and the body), never per entry.
+	if strings.Contains(cat, "writable: true") || !strings.Contains(cat, "edit_blocked:") ||
+		strings.Count(cat, "Editing a slot is not possible right now") != 1 || strings.Contains(cat, "does not allow an edit right now") {
 		t.Errorf("catalog while printing:\n%s", cat)
 	}
 }

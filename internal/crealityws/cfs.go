@@ -932,3 +932,36 @@ func (c *Client) Stop(ctx context.Context) (sent bool, err error) {
 	p.linger(ctx, startLingerDuration)
 	return true, nil
 }
+
+type speedModeParams struct {
+	SpeedMode int `json:"speedMode"`
+}
+
+// SetSpeedMode sends Creality's own speed-mode message,
+// {"method":"set","params":{"speedMode":1}} to enter Silent and
+// {"method":"set","params":{"speedMode":0}} to leave it (Creality's software
+// uses exactly these; dev_docs/speed-preset-protocol.md 2.1), then lingers like
+// the start writes so the frame is delivered and heartbeats are answered. It
+// exists only for set_speed_preset: the speed factor itself is NEVER sent on
+// 9999 (setFeedratePct is not used); the policy layer sends it through the
+// allowlisted Moonraker M220 template (plan-v0.3.0.md 2a.2). There is no
+// acknowledgement frame: sent means the frame was written, not that the
+// printer acted on it.
+func (c *Client) SetSpeedMode(ctx context.Context, on bool) (sent bool, err error) {
+	conn, err := c.connect(ctx)
+	if err != nil {
+		return false, err
+	}
+	p := startPump(ctx, conn)
+	defer p.stop()
+
+	mode := 0
+	if on {
+		mode = 1
+	}
+	if err := writeJSON(ctx, conn, newSetFrame(speedModeParams{SpeedMode: mode})); err != nil {
+		return false, fmt.Errorf("crealityws: send set speedMode: %w", err)
+	}
+	p.linger(ctx, startLingerDuration)
+	return true, nil
+}

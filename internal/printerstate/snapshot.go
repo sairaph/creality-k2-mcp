@@ -90,6 +90,7 @@ var queryObjectNames = []string{
 	"box",
 	"gcode_macro PRINTER_PARAM",
 	"gcode_macro product_param",
+	"gcode_macro Qmode",
 }
 
 // Snapshot is one consistent, timestamped read of everything
@@ -149,6 +150,7 @@ type Snapshot struct {
 	Box           *moonraker.Box
 	PrinterParam  *moonraker.PrinterParam
 	ProductParam  *moonraker.ProductParam
+	QmodeMacro    *moonraker.QmodeMacro
 
 	History         moonraker.HistoryList
 	HistoryErr      error
@@ -176,7 +178,7 @@ type Snapshot struct {
 func Take(ctx context.Context, deps Deps, printer domain.Printer) Snapshot {
 	snap := Snapshot{
 		Printer: printer,
-		Taken:   time.Now().UTC(),
+		Taken:   time.Now(),
 	}
 
 	var wg sync.WaitGroup
@@ -408,6 +410,13 @@ func (s *Snapshot) decodeObjects(raw map[string]json.RawMessage) {
 		v, err := moonraker.DecodeProductParam(r)
 		if err == nil {
 			s.ProductParam = &v
+		}
+		return err
+	})
+	decode("gcode_macro Qmode", func(r json.RawMessage) error {
+		v, err := moonraker.DecodeQmodeMacro(r)
+		if err == nil {
+			s.QmodeMacro = &v
 		}
 		return err
 	})

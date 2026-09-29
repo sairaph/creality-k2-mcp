@@ -44,8 +44,9 @@ func registerFilamentTools(s *Server) {
 		Name: "list_filament_catalog",
 		Description: "Lists the printer's own filament catalog (the definitions a slot can be set to): id (the 5 " +
 			"character catalog id), brand, name, material, nozzle temperature range, and whether the entry can be " +
-			"written to a slot right now (writable, with why_not when not: an entry with no temperature range, one above the " +
-			"printer's nozzle limit, or a printer state that does not allow an edit). Without brand and material filters " +
+			"written to a slot right now (writable; why_not appears only for an entry-level reason: an entry with no temperature range or one above the " +
+			"printer's nozzle limit. A printer-wide block, such as a printing printer, makes every entry writable false and is " +
+			"stated once in edit_blocked, not repeated per entry). Without brand and material filters " +
 			"it returns the whole catalog (dozens of entries), so filter when you can. " +
 			"Optional brand and material filters match exactly, case-insensitively. Nothing of Creality's catalog is " +
 			"built into this server: the list is read from the printer over port 9999, so it needs the printer " +
@@ -118,8 +119,11 @@ type listFilamentCatalogInput struct {
 
 type listFilamentCatalogFront struct {
 	printerstate.StateBlock `yaml:",inline"`
-	Count                   int                      `yaml:"count"`
-	Entries                 []filaments.CatalogEntry `yaml:"entries"`
+	Count                   int `yaml:"count"`
+	// EditBlocked is the printer-wide reason no entry can be written right now,
+	// stated once (per-entry why_not holds only entry-level reasons).
+	EditBlocked string                   `yaml:"edit_blocked,omitempty"`
+	Entries     []filaments.CatalogEntry `yaml:"entries"`
 }
 
 func (f *listFilamentCatalogFront) StateBlockPtr() *printerstate.StateBlock { return &f.StateBlock }
@@ -146,7 +150,8 @@ func listFilamentCatalogHandler(s *Server) func(context.Context, *mcp.CallToolRe
 		if snap.ProductParam != nil {
 			nozzleCap = snap.ProductParam.NozzleTemp
 		}
-		entries, err := filaments.Catalog(ctx, deps.WS9999, brand, material, filaments.EditGate(printer, derived, s.deps.Settings), nozzleCap)
+		editBlocked := filaments.EditGate(printer, derived, s.deps.Settings)
+		entries, err := filaments.Catalog(ctx, deps.WS9999, brand, material, editBlocked, nozzleCap)
 		if err != nil {
 			return render.ErrorResult(render.Error{
 				Code:    render.CodeUnavailable,
@@ -154,7 +159,7 @@ func listFilamentCatalogHandler(s *Server) func(context.Context, *mcp.CallToolRe
 				Hint:    "Check that the printer is reachable (get_printer_status shows ws9999_reachable), then call again. This server has no built-in catalog: names only ever come from the printer.",
 			}), nil, nil
 		}
-		front := &listFilamentCatalogFront{StateBlock: block, Count: len(entries), Entries: entries}
+		front := &listFilamentCatalogFront{StateBlock: block, Count: len(entries), EditBlocked: editBlocked, Entries: entries}
 		body := fmt.Sprintf("%d catalog entr", len(entries))
 		if len(entries) == 1 {
 			body += "y"
@@ -163,6 +168,9 @@ func listFilamentCatalogHandler(s *Server) func(context.Context, *mcp.CallToolRe
 		}
 		body += " from the printer. Pass an id or an exact name as material to set_filament_definition; entries that are " +
 			"not writable say why."
+		if editBlocked != "" {
+			body += " Editing a slot is not possible right now: " + editBlocked + ". Every entry shows writable false for that reason; an entry's why_not is only about the entry itself."
+		}
 		return successResult(front, nil, body), nil, nil
 	}
 }

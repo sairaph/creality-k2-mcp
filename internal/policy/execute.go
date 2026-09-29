@@ -100,13 +100,53 @@ func (p *Policy) Execute(ctx context.Context, deps Deps, printer domain.Printer,
 		return p.executeSetFilament(ctx, deps, printer, spec, params, identity)
 	}
 
-	locks, lockErr := acquireLocks(ctx, p.locks, identity)
+	// pause_print and cancel_print take the lock from an in-flight setpoint action
+	// instead of failing with a conflict (plan-v0.3.0.md 2a.4). A setpoint action
+	// registers a cancel func, atomically with taking the lock, for as long as it
+	// holds it; a pause or cancel that arrives cancels it and waits for the lock,
+	// and the pre-empted action reports Effect "preempted" with a fresh snapshot.
+	callCtx := ctx
+	var cancel context.CancelFunc
+	if preemptible(name) {
+		callCtx, cancel = context.WithCancel(ctx)
+		defer cancel()
+	}
+	// Only pause_print and the CONFIRMING cancel_print pre-empt: the cancel
+	// proposal (no token) sends nothing and must not stop anything.
+	preempting := name == ActionPausePrint || (name == ActionCancelPrint && token != "")
+	locks, lockErr := acquireLocks(callCtx, p.locks, identity, preempting, cancel)
 	if lockErr != nil {
+		// This action took the in-process lock and was pre-empted while still
+		// waiting for the cross-process lock: its own context was cancelled while
+		// the caller's was not. It never ran, and reports that rather than a
+		// conflict. (A plain conflict never carries a cancelled own context.)
+		if cancel != nil && callCtx.Err() != nil && ctx.Err() == nil {
+			return p.preemptedResult(ctx, deps, printer, spec, params, p.locks.get(identity), Result{}, nil)
+		}
 		lockErr.Action = name
 		return Result{}, lockErr
 	}
 	defer locks.release()
 
+	if cancel == nil {
+		return p.executeLocked(ctx, deps, printer, settings, spec, params, token, identity, locks)
+	}
+	res, err := p.executeLocked(callCtx, deps, printer, settings, spec, params, token, identity, locks)
+	if locks.pl.takePreempted() {
+		// Give the lock back BEFORE the fresh read: the read is read-only and can
+		// take seconds when port 9999 is slow, and the waiting pause or cancel must
+		// never be held up by it. (release is idempotent; the defer stays a safety net.)
+		pl := locks.pl
+		locks.release()
+		return p.preemptedResult(ctx, deps, printer, spec, params, pl, res, err)
+	}
+	return res, err
+}
+
+// executeLocked is Execute's body once the locks are held: the fresh snapshot,
+// the gate, the parameter rules, the proposal or the send.
+func (p *Policy) executeLocked(ctx context.Context, deps Deps, printer domain.Printer, settings domain.Settings, spec actionSpec, params Params, token string, identity string, locks *acquiredLocks) (Result, error) {
+	name := spec.Name
 	now := time.Now()
 
 	if token != "" {
@@ -168,7 +208,7 @@ func (p *Policy) Execute(ctx context.Context, deps Deps, printer domain.Printer,
 			Proposed:  true,
 			Token:     tok,
 			ExpiresAt: now.Add(tokenTTL),
-			Effects:   withCFSNote(effects, spec.Name, derived),
+			Effects:   withCFSNote(proposalWarnings(name, effects, derived), spec.Name, derived),
 			Commands:  commands,
 			Before:    printerstate.BuildStateBlock(snap, derived, nil),
 			Printer:   printer,
@@ -350,7 +390,10 @@ func checkGate(spec actionSpec, derived printerstate.Derived) *Error {
 		}
 		return nil
 	}
-	return checkBucketAndCFS(spec, derived)
+	if err := checkBucketAndCFS(spec, derived); err != nil {
+		return err
+	}
+	return checkSilentGate(spec, derived)
 }
 
 // send dispatches to the per-action sender. identity is the already-verified
@@ -360,7 +403,17 @@ func checkGate(spec actionSpec, derived printerstate.Derived) *Error {
 // from printer (review backlog item 31): the same identity must be used for
 // arming, querying and disarming the watchdog, or a status query can miss
 // what Execute actually armed.
+// send dispatches to the per-action sender (sendAction) and adds the stuck-Silent
+// warning to a start_print result (plan 2a.9).
 func (p *Policy) send(ctx context.Context, deps Deps, printer domain.Printer, identity string, settings domain.Settings, spec actionSpec, params Params, snap printerstate.Snapshot, derived printerstate.Derived, locks *acquiredLocks, bind *binding) (Result, error) {
+	res, err := p.sendAction(ctx, deps, printer, identity, settings, spec, params, snap, derived, locks, bind)
+	if err == nil && spec.Name == ActionStartPrint {
+		res.Effects = append(append([]string(nil), res.Effects...), stuckSilentNotes(derived)...)
+	}
+	return res, err
+}
+
+func (p *Policy) sendAction(ctx context.Context, deps Deps, printer domain.Printer, identity string, settings domain.Settings, spec actionSpec, params Params, snap printerstate.Snapshot, derived printerstate.Derived, locks *acquiredLocks, bind *binding) (Result, error) {
 	switch spec.Name {
 	case ActionStartPrint:
 		if derived.CFSConnected {
@@ -380,6 +433,8 @@ func (p *Policy) send(ctx context.Context, deps Deps, printer domain.Printer, id
 			return p.sendStopInWindow(ctx, deps, printer, spec, snap, derived, locks)
 		}
 		return p.sendPolled(ctx, deps, printer, identity, settings, spec, params, snap, derived, locks)
+	case ActionSetSpeedPreset:
+		return p.sendSpeedPreset(ctx, deps, printer, settings, spec, params, snap, derived, locks)
 	case ActionSetLight:
 		return p.sendSetLight(ctx, deps, printer, spec, params, snap, derived)
 	case ActionUploadGCodeFile:
@@ -437,4 +492,63 @@ func joinChanged(changed []string) string {
 		out += c
 	}
 	return out
+}
+
+// preemptedResult is what a setpoint action returns when pause_print or
+// cancel_print took the lock from it (plan-v0.3.0.md 2a.4): Effect
+// "preempted" with a fresh snapshot taken on the caller's own context (the
+// action's context was cancelled). An action that had already confirmed its
+// effect keeps that result: the pre-emption cost it nothing.
+func (p *Policy) preemptedResult(ctx context.Context, deps Deps, printer domain.Printer, spec actionSpec, params Params, pl *printerLock, res Result, err error) (Result, error) {
+	// A call that had already reached its own outcome keeps it: confirmed, a
+	// no_change, or a refusal that depends only on the request (invalid input,
+	// forbidden, not found) is not an interruption. Refusals that read the printer
+	// (unavailable, conflict, internal) may be artifacts of the cancelled context, so
+	// they are reported as preempted with the fresh read.
+	if err == nil && (res.Effect == "confirmed" || res.Effect == "no_change") {
+		return res, nil
+	}
+	if perr, ok := err.(*Error); ok && (perr.Code == CodeInvalidInput || perr.Code == CodeForbidden || perr.Code == CodeNotFound) {
+		return res, err
+	}
+	fresh := printerstate.Take(ctx, deps.stateDeps(), printer)
+	derived := deriveFor(pl, fresh, nil)
+	out := Result{
+		Action: spec.Name,
+		// Accepted only from a write that returned nil; a write the cancellation
+		// interrupted, or no write at all, is not accepted.
+		Accepted: res.Accepted && len(res.Commands) > 0,
+		Effect:   "preempted",
+		Effects:  append(append([]string(nil), res.Effects...), "pause_print or cancel_print took the printer lock while this action was in flight, so it was stopped; a write it had already sent may still have been queued and can run later; the state below is a fresh read taken after the interruption"),
+		Commands: res.Commands,
+		Before:   res.Before,
+		After:    printerstate.BuildStateBlock(fresh, derived, nil),
+		Printer:  printer,
+		Job:      printerstate.JobIdentityFrom(fresh),
+	}
+	if spec.Name == ActionSetSpeedPreset {
+		// Say what a fresh read shows, and keep the structured two-channel report.
+		report := presetReport(params.Preset, fresh, derived)
+		if res.SpeedPreset != nil {
+			report.Notes = append(report.Notes, res.SpeedPreset.Notes...)
+		}
+		note := fmt.Sprintf("a fresh read after the interruption shows Silent %s and the speed factor at %s", derived.Qmode, percentText(report.MoonrakerFactorPct))
+		report.Notes = append(report.Notes, note)
+		out.Effects = append(out.Effects, note)
+		out.SpeedPreset = report
+	}
+	return out, nil
+}
+
+// proposalWarnings adds the stuck-Silent warning to a start_print proposal
+// (plan 2a.9); every other proposal is unchanged.
+func proposalWarnings(name ActionName, effects []string, derived printerstate.Derived) []string {
+	if name != ActionStartPrint {
+		return effects
+	}
+	notes := stuckSilentNotes(derived)
+	if len(notes) == 0 {
+		return effects
+	}
+	return append(append([]string(nil), effects...), notes...)
 }

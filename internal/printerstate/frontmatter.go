@@ -1,6 +1,7 @@
 package printerstate
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -159,6 +160,24 @@ type StateBlock struct {
 	SpeedFactorPercent *float64 `yaml:"speed_factor_percent,omitempty"`
 	FlowFactorPercent  *float64 `yaml:"flow_factor_percent,omitempty"`
 
+	// SpeedPreset is silent, stable, standard, ultrafast, custom or unknown; it is
+	// shown only in buckets P and Z (plan-v0.3.0.md 2a.10). unknown also covers a
+	// Moonraker and port 9999 disagreement. SilentMode is the derived Silent flag
+	// (on, off or unknown), and SpeedMode9999 and CurFeedratePct9999 are port
+	// 9999's own readings when it reported them, so both channels are visible.
+	SpeedPreset string `yaml:"speed_preset,omitempty"`
+	SilentMode  string `yaml:"silent_mode,omitempty"`
+	// SpeedPresetNote is set when Silent's limits are active but the speed factor is
+	// not 50% (a CFS filament change runs M220 S100 while Silent stays on, or another
+	// client changed it): speed_preset stays silent, and this says what differs.
+	SpeedPresetNote    string `yaml:"speed_preset_note,omitempty"`
+	SpeedMode9999      *int   `yaml:"speed_mode_9999,omitempty"`
+	CurFeedratePct9999 *int   `yaml:"cur_feedrate_pct_9999,omitempty"`
+	// ToolheadMaxVelocity is toolhead.max_velocity, information only: the firmware
+	// does not clamp velocity in Silent (a file that sets VELOCITY overrides 150),
+	// so no confirmation or gate ever reads it (plan-v0.3.0.md 2a.8).
+	ToolheadMaxVelocity *float64 `yaml:"toolhead_max_velocity_mm_s,omitempty"`
+
 	// Fans, reported as a percent via domain's fan helpers, and light.
 	PartFanPercent      *float64 `yaml:"part_fan_percent,omitempty"`
 	CaseFanPercent      *float64 `yaml:"case_fan_percent,omitempty"`
@@ -215,7 +234,7 @@ func BuildStateBlock(snap Snapshot, derived Derived, pending *PendingAction) Sta
 		Hostname:         snap.Printer.Hostname,
 		Model:            snap.WS9999.Model,
 		VerifiedHostname: verifiedHostname(snap),
-		SnapshotTime:     snap.Taken.Format(rfc3339),
+		SnapshotTime:     snap.Taken.UTC().Format(rfc3339),
 		ActivityState:    derived.State,
 		Bucket:           string(derived.Bucket),
 		GatingClass:      string(derived.Class),
@@ -246,6 +265,30 @@ func BuildStateBlock(snap Snapshot, derived Derived, pending *PendingAction) Sta
 	if snap.GCodeMove != nil {
 		block.SpeedFactorPercent = percentFromFactor(snap.GCodeMove.SpeedFactor)
 		block.FlowFactorPercent = percentFromFactor(snap.GCodeMove.ExtrudeFactor)
+	}
+
+	if preset := SpeedPresetOf(snap, derived); preset != "" {
+		block.SpeedPreset = preset
+		block.SilentMode = derived.Qmode.String()
+		if preset == PresetSilent && snap.GCodeMove != nil && snap.GCodeMove.SpeedFactor != nil {
+			if f := *snap.GCodeMove.SpeedFactor * 100; !presetNear(f, 50) {
+				block.SpeedPresetNote = fmt.Sprintf("Silent's limits are active but the speed factor is %.0f%% (a CFS filament change or another client changed it)", f)
+			}
+		}
+		if snap.Toolhead != nil && snap.Toolhead.MaxVelocity > 0 {
+			v := snap.Toolhead.MaxVelocity
+			block.ToolheadMaxVelocity = &v
+		}
+		if snap.WS9999Reachable {
+			if snap.WS9999.SpeedMode.Present {
+				v := snap.WS9999.SpeedMode.Value
+				block.SpeedMode9999 = &v
+			}
+			if snap.WS9999.CurFeedrate.Present {
+				v := snap.WS9999.CurFeedrate.Value
+				block.CurFeedratePct9999 = &v
+			}
+		}
 	}
 
 	if derived.State == StatePaused && snap.PrinterParam != nil {
