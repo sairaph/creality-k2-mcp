@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // fakeCameraViewer implements CameraViewer without ever starting the real
@@ -406,7 +406,7 @@ func TestRunCameraRecordStartsAndPrintsIDAndPath(t *testing.T) {
 	rec := &fakeCameraRecorder{startInfo: daemon.RecordingInfo{
 		ID: "k2-5885/20260928T150405Z",
 		Parts: []daemon.RecordingPart{
-			{Path: "/home/user/.creality_k2_mcp/recordings/k2-5885/20260928T150405Z.mp4"},
+			{Path: "/home/user/.creality-k2-mcp/recordings/k2-5885/20260928T150405Z.mp4"},
 		},
 	}}
 	deps.CameraRecorder = rec

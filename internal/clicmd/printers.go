@@ -8,10 +8,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/discovery"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
-	"github.com/sairaph/creality_k2_mcp/internal/wizard"
+	"github.com/sairaph/creality-k2-mcp/internal/discovery"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/wizard"
 )
 
 const printersUsage = `usage: printers [scan | add <host> | enable <id> | disable <id> | control on|off <id>]

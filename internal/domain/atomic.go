@@ -8,9 +8,9 @@ import (
 
 // appDirName is the per-user application directory shared by the printer
 // registry, settings and lock files.
-const appDirName = ".creality_k2_mcp"
+const appDirName = ".creality-k2-mcp"
 
-// baseDir resolves ~/.creality_k2_mcp. It does not create anything: a caller
+// baseDir resolves ~/.creality-k2-mcp. It does not create anything: a caller
 // that only reads must not bring the directory into existence.
 func baseDir() (string, error) {
 	home, err := os.UserHomeDir()

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // fakeCameraRecorder is a CameraRecorder (deps.go) driven entirely by

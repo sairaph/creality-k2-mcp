@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // errBoom is a fixed error TestWatchdog_Expiry_RecordsTurnOffFailure uses

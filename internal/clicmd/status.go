@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 const statusUsage = "usage: status [printer] [--json]\n"

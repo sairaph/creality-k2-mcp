@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // This file tests get_printer_status's D2 idle-heat watchdog surfacing

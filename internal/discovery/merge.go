@@ -3,7 +3,7 @@ package discovery
 import (
 	"strings"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // MergeResult pairs one discovered Result with what the registry already

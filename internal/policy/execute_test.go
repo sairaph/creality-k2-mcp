@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 func TestExecute_StartPrint_ReachesPrinting(t *testing.T) {

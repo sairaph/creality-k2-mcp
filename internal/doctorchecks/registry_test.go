@@ -9,16 +9,16 @@ import (
 
 	"github.com/sairaph/mcp-wizard/doctor"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
-// setTestHome redirects domain's per-user base directory (~/.creality_k2_mcp)
+// setTestHome redirects domain's per-user base directory (~/.creality-k2-mcp)
 // into a fresh, short-named temp directory, so no test here ever reads or
 // writes the real user's registry or settings. This deliberately does not
 // use t.TempDir() directly: that nests the directory under this package's
 // (often long) test function name, and DaemonCheck's own tests build a real
 // AF_UNIX socket several path segments further down
-// (<home>/.creality_k2_mcp/daemon/daemon.sock) - long enough, combined with
+// (<home>/.creality-k2-mcp/daemon/daemon.sock) - long enough, combined with
 // a descriptive test name, to exceed Windows's sockaddr_un path limit and
 // fail with "bind: invalid argument". os.MkdirTemp with a short prefix
 // keeps every path this package's tests build well under that limit.

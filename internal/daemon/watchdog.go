@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // expireCheckTimeout bounds the fresh snapshot-and-send Watchdog performs

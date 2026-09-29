@@ -3,8 +3,8 @@ package policy
 import (
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // actionSpec is the static, declarative half of dev_docs/safety-architecture.md

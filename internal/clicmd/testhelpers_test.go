@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
-// isolateHome points domain's baseDir (~/.creality_k2_mcp) at a fresh temp
+// isolateHome points domain's baseDir (~/.creality-k2-mcp) at a fresh temp
 // directory, the same pattern internal/wizard's own tests use
 // (internal/wizard/wizard_test.go's isolateHome), so a clicmd test never
 // reads or writes a real user's registry or settings file.

@@ -1,8 +1,8 @@
 package policy
 
 import (
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // Available implements dev_docs/safety-architecture.md section 3.2's

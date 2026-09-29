@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
-// setTestHome redirects domain's per-user base directory (~/.creality_k2_mcp)
+// setTestHome redirects domain's per-user base directory (~/.creality-k2-mcp)
 // into a fresh t.TempDir() for the duration of one test, so Execute's
 // cross-process file lock (domain.LockPath) never touches the real user
 // home directory during tests, matching how internal/domain's own lock

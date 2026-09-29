@@ -1,4 +1,4 @@
-# creality_k2_mcp
+# creality-k2-mcp
 
 Control a Creality K2-family 3D printer from Claude Desktop, Claude Code and
 other MCP clients: check status and job progress, browse and inspect gcode
@@ -23,16 +23,16 @@ below.
 Windows (PowerShell):
 
 ```powershell
-irm https://github.com/sairaph/creality_k2_mcp/releases/latest/download/install.ps1 | iex
+irm https://github.com/sairaph/creality-k2-mcp/releases/latest/download/install.ps1 | iex
 ```
 
 macOS / Linux:
 
 ```sh
-curl -fsSL https://github.com/sairaph/creality_k2_mcp/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/sairaph/creality-k2-mcp/releases/latest/download/install.sh | sh
 ```
 
-The installer downloads `creality_k2_mcp`, verifies its SHA256 checksum, puts
+The installer downloads `creality-k2-mcp`, verifies its SHA256 checksum, puts
 it on your `PATH`, and starts the install wizard, which has two steps before
 anything is written to disk:
 
@@ -50,15 +50,15 @@ this machine to register the server with (already-configured clients are
 pre-checked), and an **Apply** step writes everything - the registry, the
 settings, and each selected client's own config, idempotently.
 
-Run `creality_k2_mcp doctor` at any time to check the installation, and
-`creality_k2_mcp update` to update to the latest release. See
+Run `creality-k2-mcp doctor` at any time to check the installation, and
+`creality-k2-mcp update` to update to the latest release. See
 [docs/cli.md](docs/cli.md) for every command, and
 [docs/configuration.md](docs/configuration.md) for unattended installs and
 manual client configuration.
 
 ## Quick start
 
-1. Run the installer above (or `creality_k2_mcp install` if you already have
+1. Run the installer above (or `creality-k2-mcp install` if you already have
    the binary) and follow the wizard.
 2. Restart your AI client.
 3. Ask it something like "what's my printer doing right now?" - it will call
@@ -84,7 +84,7 @@ Which tools get registered at all is controlled by a preset
 Even with the `control` preset registered, a write is still refused for a
 specific printer unless that printer's own `allow_control` is set in the
 registry - set per printer in the install wizard, the TUI, or with
-`creality_k2_mcp printers control on <id>`. This is a second, independent
+`creality-k2-mcp printers control on <id>`. This is a second, independent
 gate on top of which tools exist at all: registering control tools does not
 by itself let the AI touch any given printer. See
 [docs/configuration.md](docs/configuration.md) for the full settings
@@ -124,7 +124,7 @@ is built into this server; names always come from the printer).
 
 **What works**
 
-- `get_filaments` (and `creality_k2_mcp filaments`) shows each CFS slot and the
+- `get_filaments` (and `creality-k2-mcp filaments`) shows each CFS slot and the
   side spool: the stored definition (brand, material, colour, nozzle range),
   whether it can be edited, and the printer's own refill groups.
   `list_filament_catalog` lists the definitions a slot can be set to.
@@ -168,13 +168,13 @@ The exact per-tool rules and the reasons behind them are in
 ## Camera
 
 - **Snapshot** - one still frame, `get_camera_snapshot` or
-  `creality_k2_mcp snapshot`.
+  `creality-k2-mcp snapshot`.
 - **Local live view** - a continuously updating browser page,
-  `open_camera_view` or `creality_k2_mcp camera open`; local to this
+  `open_camera_view` or `creality-k2-mcp camera open`; local to this
   computer only, gated by a per-session token.
 - **Recording** - video (fragmented MP4, crash-safe) or timelapse (one still
   per layer change), `start_recording`/`stop_recording`/`list_recordings`/
-  `delete_recording` or `creality_k2_mcp camera record|stop|recordings|delete`.
+  `delete_recording` or `creality-k2-mcp camera record|stop|recordings|delete`.
 
 All of it shares one connection per printer through a small background
 daemon that starts automatically the first time it's needed. Full detail,
@@ -182,15 +182,15 @@ file locations, limits and troubleshooting: [docs/camera.md](docs/camera.md).
 
 ## CLI, TUI, doctor, uninstall
 
-`creality_k2_mcp` is one binary: the MCP server, an install wizard, a TUI,
+`creality-k2-mcp` is one binary: the MCP server, an install wizard, a TUI,
 and a set of one-shot commands (`printers`, `status`, `filaments`, `snapshot`,
 `camera`, `doctor`, `update`) that share their logic with the MCP tools, so they can
 never disagree. Run it with no arguments in a terminal to open the TUI.
 
 ```sh
-creality_k2_mcp doctor        # diagnose the installation
-creality_k2_mcp printers      # list registered printers and their state
-creality_k2_mcp uninstall     # remove from every registered AI client
+creality-k2-mcp doctor        # diagnose the installation
+creality-k2-mcp printers      # list registered printers and their state
+creality-k2-mcp uninstall     # remove from every registered AI client
 ```
 
 Full command reference: [docs/cli.md](docs/cli.md).
@@ -209,7 +209,7 @@ Full command reference: [docs/cli.md](docs/cli.md).
 
 MIT, see [LICENSE](LICENSE).
 
-creality_k2_mcp embeds a WebAssembly build of Cisco's OpenH264 H.264 decoder
+creality-k2-mcp embeds a WebAssembly build of Cisco's OpenH264 H.264 decoder
 (BSD-2-Clause, decoder-only, compiled from source) and uses the wazero
 WebAssembly runtime (Apache-2.0) to run it, for camera snapshots and
 timelapse. Their license notices are reproduced in full in [NOTICE](NOTICE).

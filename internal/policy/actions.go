@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // pendingKindFor maps an action to the printerstate.PendingKind its write

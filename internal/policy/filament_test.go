@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // set_filament_definition (plan 3.3): every refusal, no_change, the re-gate

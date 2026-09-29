@@ -9,14 +9,14 @@ import (
 	"github.com/sairaph/mcp-wizard/daemon/socket"
 	"github.com/sairaph/mcp-wizard/doctor"
 
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
 )
 
 // startTestDaemonAtDefaultPaths opens and serves a real daemon.Server over a
 // real AF_UNIX socket, exactly matching internal/daemon/client/client_test.go's
 // own fixture (AGENTS.md's hard testing rule permits this: a Unix domain
 // socket is not network I/O, and this never touches the real user's
-// ~/.creality_k2_mcp/daemon or a real printer), serving at exactly the
+// ~/.creality-k2-mcp/daemon or a real printer), serving at exactly the
 // socket daemon.DefaultPaths resolves to, so DaemonCheck.Run (which builds
 // its client with plain client.New and so resolves the same default paths)
 // finds it. The caller must call setTestHome first, so that default

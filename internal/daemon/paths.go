@@ -16,17 +16,17 @@ import (
 	"path/filepath"
 )
 
-// appDirName matches internal/domain's own ~/.creality_k2_mcp, kept as a
+// appDirName matches internal/domain's own ~/.creality-k2-mcp, kept as a
 // separate literal here (rather than importing internal/domain) so this
 // package's only path dependency is the OS home directory.
-const appDirName = ".creality_k2_mcp"
+const appDirName = ".creality-k2-mcp"
 
 // daemonSubdir is where the daemon's own lock, socket, pid file and log
 // live, under appDirName.
 const daemonSubdir = "daemon"
 
 // recordingsSubdir is where T11c's recordings live, under appDirName:
-// ~/.creality_k2_mcp/recordings/<printer-id>/<timestamp>.mp4
+// ~/.creality-k2-mcp/recordings/<printer-id>/<timestamp>.mp4
 // (dev_docs/plan-v0.1.0.md decision 11). Unlike the daemon socket, a
 // recording file path is never bound by AF_UNIX's sun_path limit, so this
 // always resolves under the real home directory, even on the rare machine
@@ -41,7 +41,7 @@ const socketName = "daemon"
 
 // Paths locates every file the daemon and its clients need to agree on.
 type Paths struct {
-	Dir    string // ~/.creality_k2_mcp/daemon
+	Dir    string // ~/.creality-k2-mcp/daemon
 	Lock   string // Dir/lock (mcp-wizard daemon/socket.Server's own lock file)
 	Socket string // Dir/daemon.sock
 	PID    string // Dir/daemon.pid
@@ -65,9 +65,9 @@ const maxSocketPathBytes = 100
 // directory under the real OS temp directory. It exists as a variable only
 // so a test whose HOME/USERPROFILE resolves to a long path (a common case:
 // testing.T.TempDir() embeds the full test name, which alone is often
-// enough to push "<home>/.creality_k2_mcp/daemon/daemon.sock" past
+// enough to push "<home>/.creality-k2-mcp/daemon/daemon.sock" past
 // maxSocketPathBytes) can point the fallback at its own short, test-owned
-// directory instead of silently creating creality_k2_mcp-<hash> directories
+// directory instead of silently creating creality-k2-mcp-<hash> directories
 // in the real user's real temp directory (dev_docs/review-backlog.md item
 // 43). internal/daemon/daemontest.Guard is the standard way test packages
 // do this.
@@ -78,7 +78,7 @@ var FallbackRoot = os.TempDir
 // would push the socket path past maxSocketPathBytes (see daemonDir). A
 // deep or long-named home directory - common on Windows, where a profile
 // often lives under a long "C:\Users\<domain account>\AppData\..." tree -
-// can easily push "<home>/.creality_k2_mcp/daemon/daemon.sock" over the
+// can easily push "<home>/.creality-k2-mcp/daemon/daemon.sock" over the
 // limit.
 func DefaultPaths() (Paths, error) {
 	home, err := os.UserHomeDir()
@@ -105,7 +105,7 @@ func daemonDir(home string) string {
 	if fitsSocketPath(preferred) {
 		return preferred
 	}
-	return filepath.Join(FallbackRoot(), "creality_k2_mcp-"+shortHash(home))
+	return filepath.Join(FallbackRoot(), "creality-k2-mcp-"+shortHash(home))
 }
 
 // fitsSocketPath reports whether dir/<socketName>.sock fits within

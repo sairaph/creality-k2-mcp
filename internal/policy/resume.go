@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // resume_print with a CFS connected (dev_docs/plan-v0.2.0.md sections 3.5 and

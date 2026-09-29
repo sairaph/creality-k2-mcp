@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
-	"github.com/sairaph/creality_k2_mcp/internal/printerclient"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/printerclient"
 )
 
 // Server wraps the MCP server and the dependencies its tool handlers need.
@@ -61,7 +61,7 @@ func newServer(config Config, deps Deps, extra ...func(*Server)) *Server {
 		deps:   deps,
 		mcpServer: mcp.NewServer(
 			&mcp.Implementation{
-				Name:    "creality_k2_mcp",
+				Name:    "creality-k2-mcp",
 				Version: config.Version,
 			},
 			&mcp.ServerOptions{
@@ -112,7 +112,7 @@ func warnUnknownToolOverrides(settings domain.Settings, tools []domain.ToolInfo)
 	if len(unknown) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "creality_k2_mcp: warning: config.toml tools.overrides names unknown tool(s): %s\n", strings.Join(unknown, ", "))
+	fmt.Fprintf(os.Stderr, "creality-k2-mcp: warning: config.toml tools.overrides names unknown tool(s): %s\n", strings.Join(unknown, ", "))
 }
 
 // MCPServer exposes the underlying server, for tests.
@@ -179,7 +179,7 @@ func (s *Server) runHTTP(ctx context.Context) error {
 		}
 	}()
 
-	fmt.Fprintf(os.Stderr, "creality_k2_mcp listening on %s (Streamable HTTP)\n", addr)
+	fmt.Fprintf(os.Stderr, "creality-k2-mcp listening on %s (Streamable HTTP)\n", addr)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return fmt.Errorf("serve http: %w", err)
 	}

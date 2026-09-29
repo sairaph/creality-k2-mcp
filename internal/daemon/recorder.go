@@ -27,10 +27,10 @@ import (
 
 	h264c "github.com/bluenviron/mediacommon/v2/pkg/codecs/h264"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/camera/fmp4"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/camera/fmp4"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // RecordMode is what a recording captures: continuous fragmented MP4

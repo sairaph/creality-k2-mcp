@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
 // connectedBox decodes the real Moonraker box object captured with a CFS

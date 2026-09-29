@@ -1,4 +1,4 @@
-// Package domain holds the business logic for creality_k2_mcp: the printer
+// Package domain holds the business logic for creality-k2-mcp: the printer
 // registry, printer resolution for tools, settings, fan mapping, temperature
 // limits and lock identity. It does not talk to Moonraker, port 9999 or the
 // network; that is internal/moonraker, internal/crealityws and
@@ -12,10 +12,10 @@ import (
 // Identity used by install, doctor and update. Owner and Repo point at the
 // GitHub repository that publishes releases.
 const (
-	ServerName = "creality_k2_mcp"
-	BinaryName = "creality_k2_mcp"
+	ServerName = "creality-k2-mcp"
+	BinaryName = "creality-k2-mcp"
 	Owner      = "sairaph"
-	Repo       = "creality_k2_mcp"
+	Repo       = "creality-k2-mcp"
 )
 
 // AssetName maps a GOOS/GOARCH pair to the release asset published by

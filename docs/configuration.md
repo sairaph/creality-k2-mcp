@@ -1,6 +1,6 @@
 # Configuration
 
-creality_k2_mcp keeps two small on-disk files - a printer registry and a
+creality-k2-mcp keeps two small on-disk files - a printer registry and a
 settings document - plus an optional environment-variable override for
 ad hoc use. This page documents all three, and how to point an MCP client at
 the server itself.
@@ -16,8 +16,8 @@ allowed for it (`allow_control`).
 
 | Scope | Path | Used when |
 | --- | --- | --- |
-| Global | `~/.creality_k2_mcp/printers.json` | Always, unless a project file exists |
-| Project | `<project-dir>/.creality_k2_mcp/printers.json` | The server (or `creality_k2_mcp add`) is invoked with that directory in scope, and the project file already exists |
+| Global | `~/.creality-k2-mcp/printers.json` | Always, unless a project file exists |
+| Project | `<project-dir>/.creality-k2-mcp/printers.json` | The server (or `creality-k2-mcp add`) is invoked with that directory in scope, and the project file already exists |
 
 If a project file exists for the current directory, it is used instead of
 the global one; otherwise the global file is used (and created on first
@@ -70,7 +70,7 @@ whole load.
 - The install wizard's **Printers** step: scans the LAN, lets you review
   what was found, add a host manually, and choose which registered printers
   are enabled and which have control turned on.
-- `creality_k2_mcp printers add <host>` and `printers scan` from the command
+- `creality-k2-mcp printers add <host>` and `printers scan` from the command
   line - see [cli.md](cli.md).
 - `discover_printers` (MCP tool) only reads the network; it never writes the
   registry itself, by design - registering a printer is always something a
@@ -79,7 +79,7 @@ whole load.
 
 ## Settings (`config.toml`)
 
-Settings live at `~/.creality_k2_mcp/config.toml` (there is no project-scoped
+Settings live at `~/.creality-k2-mcp/config.toml` (there is no project-scoped
 settings file - only the registry has that). The file is created with
 defaults on first read if it does not exist, so it is always present and
 editable after the server has run once. It is written atomically with mode
@@ -193,8 +193,8 @@ and `PATH`, so a bare command name is not reliable):
 ```json
 {
   "mcpServers": {
-    "creality_k2_mcp": {
-      "command": "/absolute/path/to/creality_k2_mcp",
+    "creality-k2-mcp": {
+      "command": "/absolute/path/to/creality-k2-mcp",
       "args": ["mcp"]
     }
   }
@@ -206,8 +206,8 @@ On Windows:
 ```json
 {
   "mcpServers": {
-    "creality_k2_mcp": {
-      "command": "C:\\path\\to\\creality_k2_mcp.exe",
+    "creality-k2-mcp": {
+      "command": "C:\\path\\to\\creality-k2-mcp.exe",
       "args": ["mcp"]
     }
   }
@@ -223,7 +223,7 @@ build.
 ### HTTP transport
 
 For advanced setups (for example, a client that only supports Streamable
-HTTP rather than stdio), `creality_k2_mcp mcp` can also listen over HTTP
+HTTP rather than stdio), `creality-k2-mcp mcp` can also listen over HTTP
 instead, selected with two environment variables read at startup:
 
 | Variable | Default | Meaning |
@@ -232,7 +232,7 @@ instead, selected with two environment variables read at startup:
 | `ADDR` | `127.0.0.1:8080` | Listen address when `TRANSPORT=http` |
 
 ```sh
-TRANSPORT=http ADDR=127.0.0.1:8080 creality_k2_mcp mcp
+TRANSPORT=http ADDR=127.0.0.1:8080 creality-k2-mcp mcp
 ```
 
 Everyday use should stick with the default stdio transport, which every

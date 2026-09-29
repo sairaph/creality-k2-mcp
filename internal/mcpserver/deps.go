@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // RegistryLoader returns the current printer registry. Tool handlers call it

@@ -1,4 +1,4 @@
-// Package tui implements creality_k2_mcp's interactive application
+// Package tui implements creality-k2-mcp's interactive application
 // (dev_docs/plan-v0.1.0.md's "TUI and CLI" section, T13b): the full-screen
 // app a bare invocation opens on a terminal (main.go's runApp). It follows
 // the mcp-wizard/app framework (menu, list, table, confirm, detail, async)
@@ -19,12 +19,12 @@ import (
 	"github.com/sairaph/mcp-wizard/app/detail"
 	"github.com/sairaph/mcp-wizard/app/menu"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerclient"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
-	"github.com/sairaph/creality_k2_mcp/internal/wizard"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerclient"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/wizard"
 )
 
 // DaemonClient is the subset of *daemon/client.Client the app needs for

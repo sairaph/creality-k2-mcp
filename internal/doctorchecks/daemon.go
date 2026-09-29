@@ -9,7 +9,7 @@ import (
 
 	"github.com/sairaph/mcp-wizard/doctor"
 
-	daemonclient "github.com/sairaph/creality_k2_mcp/internal/daemon/client"
+	daemonclient "github.com/sairaph/creality-k2-mcp/internal/daemon/client"
 )
 
 // daemonProbeTimeout bounds the viewer.url round trip (Client.ViewerURL has
@@ -34,7 +34,7 @@ const notRunningHint = "not running; idle heating is refused while it is down (a
 	"recording starts it automatically on demand"
 
 // DaemonCheck reports whether the background camera/idle-heat daemon
-// (internal/daemon, run as the hidden `creality_k2_mcp camera serve`) is
+// (internal/daemon, run as the hidden `creality-k2-mcp camera serve`) is
 // currently running; when it is, how many heaters are armed across the
 // registry's enabled printers, and whether the local browser camera viewer
 // page (dev_docs/plan-v0.1.0.md T11b, MethodViewerURL) answers.

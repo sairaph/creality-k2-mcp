@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // fakeCameraViewer is a CameraViewer (deps.go) that returns a fixed URL or

@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
 // fakePrinter is a test-only double built from the real macro call graph in

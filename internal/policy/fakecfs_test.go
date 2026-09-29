@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
 )
 
 // fakeCFS is the CFS half of fakePrinter (dev_docs/plan-v0.2.0.md section

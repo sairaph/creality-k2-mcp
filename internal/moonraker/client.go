@@ -1,5 +1,5 @@
 // Package moonraker is a typed HTTP client for the Moonraker API on a
-// Creality K2, trimmed to exactly the endpoints creality_k2_mcp needs.
+// Creality K2, trimmed to exactly the endpoints creality-k2-mcp needs.
 //
 // Two things make this printer's Moonraker unlike a stock install, and both
 // shape this package (see references/analysis/02-moonraker-api.md):

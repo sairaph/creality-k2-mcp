@@ -4,8 +4,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
 // ActionGate is one entry of the frontmatter's actions list

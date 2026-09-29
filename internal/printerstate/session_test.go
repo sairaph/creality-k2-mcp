@@ -3,7 +3,7 @@ package printerstate
 import (
 	"testing"
 
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
 // Supervised session 2026-09-29: virtual_sdcard.bed_mesh_calibate_state stays

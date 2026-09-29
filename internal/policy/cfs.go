@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // cfsRule is an action's rule while a CFS is connected (plan-v0.2.0.md

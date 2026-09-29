@@ -9,7 +9,7 @@ import (
 	"github.com/sairaph/mcp-wizard/flow"
 	"github.com/sairaph/mcp-wizard/tui"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // SettingsState is embedded in consumer state for the Settings step.

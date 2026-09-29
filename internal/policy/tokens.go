@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // tokenTTL is the proposal_token expiry (dev_docs/safety-architecture.md

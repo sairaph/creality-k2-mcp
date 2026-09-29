@@ -1,4 +1,4 @@
-// Package doctorchecks implements creality_k2_mcp's own health checks
+// Package doctorchecks implements creality-k2-mcp's own health checks
 // (dev_docs/plan-v0.1.0.md, T14): the printer registry, settings, every
 // enabled printer's reachability, and the background camera/idle-heat
 // daemon. Each check satisfies github.com/sairaph/mcp-wizard/doctor.Check
@@ -12,8 +12,8 @@ import (
 
 	"github.com/sairaph/mcp-wizard/doctor"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // Checks builds every check this package provides, for main.go's newDoctor

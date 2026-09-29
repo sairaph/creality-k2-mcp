@@ -9,8 +9,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sairaph/mcp-wizard/flow"
 
-	"github.com/sairaph/creality_k2_mcp/internal/discovery"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/discovery"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // printersTestState is a minimal flow consumer state, the same shape main.go's

@@ -24,9 +24,9 @@ import (
 	"github.com/sairaph/mcp-wizard/daemon/lock"
 	"github.com/sairaph/mcp-wizard/daemon/socket"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/daemon"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/daemon"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
 )
 
 // noAutostartEnv is an explicit escape hatch: any process (test or not) that

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // This file implements dev_docs/safety-architecture.md section 6's sequence
@@ -156,7 +156,7 @@ func TestSequence_RestartedServerForgetsTokens(t *testing.T) {
 
 // Two processes contending on the lock (dev_docs/safety-architecture.md
 // section 3.4): a genuine OS-level holder of the cross-process file lock
-// (simulating a second creality_k2_mcp process) makes Execute fail fast
+// (simulating a second creality-k2-mcp process) makes Execute fail fast
 // with a conflict rather than silently racing it.
 func TestSequence_TwoProcessesContendForTheSameLock(t *testing.T) {
 	setTestHome(t)

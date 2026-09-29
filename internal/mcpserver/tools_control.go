@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/policy"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/policy"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 	"github.com/sairaph/mcp-wizard/render"
 )
 
@@ -492,7 +492,7 @@ func policyErrorHint(err *policy.Error) string {
 	}
 	switch err.Code {
 	case policy.CodeForbidden:
-		return "Only the user can allow control, and this server has no tool for it: ask them to run `creality_k2_mcp printers control on <printer id>` (or turn control on in the install wizard or TUI), then retry."
+		return "Only the user can allow control, and this server has no tool for it: ask them to run `creality-k2-mcp printers control on <printer id>` (or turn control on in the install wizard or TUI), then retry."
 	case policy.CodeInvalidInput:
 		return "Adjust the value to fit the stated range or configured band, or widen the band in settings, then call again."
 	case policy.CodeConflict:
@@ -827,7 +827,7 @@ func excludeObjectHandler(s *Server) func(context.Context, *mcp.CallToolRequest,
 func filamentErrorHint(err *policy.Error) string {
 	switch err.Code {
 	case policy.CodeForbidden:
-		return "Only the user can allow control, and this server has no tool for it: ask them to run `creality_k2_mcp printers control on <printer id>` (or turn control on in the install wizard or TUI), then retry."
+		return "Only the user can allow control, and this server has no tool for it: ask them to run `creality-k2-mcp printers control on <printer id>` (or turn control on in the install wizard or TUI), then retry."
 	case policy.CodeInvalidInput:
 		return "Fix the slot (T1A to T4D), the material (an id or exact name from list_filament_catalog) or the colour (#rrggbb), then call set_filament_definition again."
 	case policy.CodeNotFound:

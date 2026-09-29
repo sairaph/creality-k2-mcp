@@ -3,12 +3,12 @@
 /dev_docs/
 
 # Go build output
-/creality_k2_mcp
-/creality_k2_mcp.exe
+/creality-k2-mcp
+/creality-k2-mcp.exe
 /dist/
 
-# Project-scoped printer registry written by `creality_k2_mcp add`
-/.creality_k2_mcp/
+# Project-scoped printer registry written by `creality-k2-mcp add`
+/.creality-k2-mcp/
 
 # Downloaded toolchains and source checkouts used by tools/wasm-h264/build.sh
 # and build.ps1 (wasi-sdk, OpenH264). Reproducible from the build scripts;

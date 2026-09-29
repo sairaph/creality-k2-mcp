@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // viewerTokenBytes is how many random bytes the per-daemon access token is

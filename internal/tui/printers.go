@@ -10,10 +10,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sairaph/mcp-wizard/app"
 
-	"github.com/sairaph/creality_k2_mcp/internal/discovery"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
-	"github.com/sairaph/creality_k2_mcp/internal/wizard"
+	"github.com/sairaph/creality-k2-mcp/internal/discovery"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/wizard"
 )
 
 // printersReachTimeout bounds the per-printer reachability probe the

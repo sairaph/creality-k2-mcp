@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // crossProcessLockTimeout bounds how long Execute waits for the

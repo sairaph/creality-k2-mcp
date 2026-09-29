@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // The start window (dev_docs/plan-v0.2.0.md section 8a.1; review-2 MF1).

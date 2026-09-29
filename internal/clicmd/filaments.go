@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/filaments"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/filaments"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 const filamentsUsage = "usage: filaments [printer] [--json]\n"

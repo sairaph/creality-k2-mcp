@@ -8,7 +8,7 @@ import (
 
 	"github.com/sairaph/mcp-wizard/doctor"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // SettingsCheck reports config.toml's path, tool preset, bands, idle heat

@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // Policy is the stateful half of this package: the per-printer lock

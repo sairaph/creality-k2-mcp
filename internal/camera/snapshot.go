@@ -6,7 +6,7 @@ import (
 	"image"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/camera/decode"
+	"github.com/sairaph/creality-k2-mcp/internal/camera/decode"
 )
 
 // snapshotBudget is the overall time budget for Snapshot: opening a

@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
-	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
+	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
 )
 
 // Pause and resume in flight (supervised session 2026-09-29, final review M1,

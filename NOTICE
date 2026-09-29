@@ -1,8 +1,8 @@
-creality_k2_mcp - third-party notices
+creality-k2-mcp - third-party notices
 ======================================
 
 This file lists the license notices required for components embedded in, or
-compiled into, the creality_k2_mcp binary, beyond the project's own code. It
+compiled into, the creality-k2-mcp binary, beyond the project's own code. It
 does not enumerate every Go module dependency listed in go.mod/go.sum (each
 of those is used under its own permissive open-source license, primarily
 MIT, BSD, and Apache-2.0, and its license text ships with its own module
@@ -10,7 +10,7 @@ source); it covers the two components whose inclusion needs explicit
 attribution: a compiled, embedded binary derived from third-party source
 code, and the runtime that executes it.
 
-creality_k2_mcp's own license has not been decided yet (see README.md); this
+creality-k2-mcp's own license has not been decided yet (see README.md); this
 file stands regardless of that decision, since the notices below are
 required by the licenses of the components themselves.
 
@@ -18,7 +18,7 @@ required by the licenses of the components themselves.
 1. OpenH264 (Cisco Systems) - decoder-only, compiled to WebAssembly
 --------------------------------------------------------------------------
 
-creality_k2_mcp embeds a WebAssembly build of OpenH264's H.264 decoder
+creality-k2-mcp embeds a WebAssembly build of OpenH264's H.264 decoder
 (decoder-only; no encoder code is built or included), compiled from Cisco's
 OpenH264 source at commit 652bdb7719f30b52b08e506645a7322ff1b2cc6f (tag
 v2.6.0), with a small two-hunk patch applied for WASI compatibility. The
@@ -59,7 +59,7 @@ require retaining this notice in both source and binary distribution.
 
 A note on patents: Cisco separately offers a royalty-free, Cisco-hosted
 precompiled OpenH264 binary under its own Binary License and an associated
-patent grant from its AVC/H.264 Patent Portfolio License. creality_k2_mcp
+patent grant from its AVC/H.264 Patent Portfolio License. creality-k2-mcp
 does not use that precompiled binary or that Binary License - it compiles
 OpenH264 from the BSD-2-Clause-licensed source itself, which carries no
 patent grant of its own attached. See dev_docs/t0-decoder-spike.md for the
@@ -69,7 +69,7 @@ full analysis behind this choice.
 2. wazero (Tetrate) - WebAssembly runtime
 --------------------------------------------------------------------------
 
-creality_k2_mcp uses github.com/tetratelabs/wazero, a zero-dependency
+creality-k2-mcp uses github.com/tetratelabs/wazero, a zero-dependency
 WebAssembly runtime for Go, to load and execute the embedded OpenH264 decoder
 module described above (CGO_ENABLED=0 throughout; wazero is what lets this
 project ship a single static binary with no C toolchain or shared library

@@ -6,13 +6,15 @@ import (
 	"image"
 	"image/color"
 	"math/rand"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"github.com/sairaph/creality_k2_mcp/internal/camera"
-	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
+	"github.com/sairaph/creality-k2-mcp/internal/domain"
 )
 
 // fakeCameraSnapshotter is a CameraSnapshotter (deps.go) that returns a
@@ -44,22 +46,29 @@ func (slowCameraSnapshotter) Snapshot(ctx context.Context, host string) (*camera
 	return nil, ctx.Err()
 }
 
-// delayedCameraSnapshotter is a CameraSnapshotter that sleeps for a fixed
-// delay before returning result, used only by
-// TestGetCameraSnapshotStateAndCaptureRunConcurrently to make the capture
-// itself take a measurable, controlled amount of time.
-type delayedCameraSnapshotter struct {
-	delay  time.Duration
-	result *camera.SnapshotResult
+// rendezvousCameraSnapshotter is a CameraSnapshotter for
+// TestGetCameraSnapshotStateAndCaptureRunConcurrently: it announces that the
+// capture started, then blocks until the state check has reached the fake
+// Moonraker (or the wait times out), so overlap is proven by both sides
+// making progress rather than by elapsed time.
+type rendezvousCameraSnapshotter struct {
+	started     chan struct{} // closed when Snapshot is entered
+	stateSeen   <-chan struct{}
+	wait        time.Duration
+	result      *camera.SnapshotResult
+	timedOutMsg func()
 }
 
-func (d delayedCameraSnapshotter) Snapshot(ctx context.Context, host string) (*camera.SnapshotResult, error) {
+func (r rendezvousCameraSnapshotter) Snapshot(ctx context.Context, host string) (*camera.SnapshotResult, error) {
+	close(r.started)
 	select {
-	case <-time.After(d.delay):
+	case <-r.stateSeen:
+	case <-time.After(r.wait):
+		r.timedOutMsg()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	return d.result, nil
+	return r.result, nil
 }
 
 // solidImage returns a small, uniformly colored image, which JPEG compresses
@@ -387,34 +396,47 @@ func TestGetCameraSnapshotUnavailableWhenPrinterOffline(t *testing.T) {
 
 // TestGetCameraSnapshotStateAndCaptureRunConcurrently confirms the state
 // check and the capture actually overlap rather than running one after the
-// other (dev_docs/item51-review.md part 2a's proposed fix): both are given
-// an artificial delay, and the call's total wall time must stay well under
-// their sum, close to whichever delay is larger instead.
+// other (dev_docs/item51-review.md part 2a's proposed fix). Overlap is proven
+// by a rendezvous, not by wall time: the capture blocks until the fake
+// Moonraker has received the state check's /server/info request, and that
+// request blocks until the capture has started. Run one after the other,
+// neither wait can be satisfied and each times out.
 func TestGetCameraSnapshotStateAndCaptureRunConcurrently(t *testing.T) {
-	const delay = 150 * time.Millisecond
-	deps, _ := singlePrinterDeps(t, domain.PresetCamera, nil)
-	deps.CameraSnapshot = delayedCameraSnapshotter{
-		delay: delay,
+	const wait = 5 * time.Second
+	const sequentialMsg = "the state check and the capture ran sequentially (each waited for the other to start)"
+	captureStarted := make(chan struct{})
+	stateSeen := make(chan struct{})
+	var once sync.Once
+	serverInfo := fixture(t, "moonraker", "server_info.json")
+	overrides := map[string]http.HandlerFunc{
+		"/server/info": func(w http.ResponseWriter, r *http.Request) {
+			once.Do(func() { close(stateSeen) })
+			select {
+			case <-captureStarted:
+			case <-time.After(wait):
+				t.Error(sequentialMsg)
+			case <-r.Context().Done():
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(serverInfo)
+		},
+	}
+	deps, _ := singlePrinterDeps(t, domain.PresetCamera, overrides)
+	deps.CameraSnapshot = rendezvousCameraSnapshotter{
+		started:   captureStarted,
+		stateSeen: stateSeen,
+		wait:      wait,
 		result: &camera.SnapshotResult{
 			Image: solidImage(64, 64, color.RGBA{A: 255}), CapturedAt: time.Now(), Width: 64, Height: 64,
 		},
+		timedOutMsg: func() { t.Error(sequentialMsg) },
 	}
 	cs := testSession(t, deps)
 
-	start := time.Now()
 	res := call(t, cs, "get_camera_snapshot", nil)
-	elapsed := time.Since(start)
 
 	if res.IsError {
 		t.Fatalf("get_camera_snapshot failed: %v", texts(res))
-	}
-	// The printerstate.Take side of this call talks to fakeMoonraker/fake9999
-	// over real (loopback) HTTP/WS round trips of its own, so this only needs
-	// to rule out the two delays serializing (>= 2*delay), not pin the exact
-	// elapsed time.
-	if elapsed >= 2*delay {
-		t.Errorf("get_camera_snapshot took %v, want well under %v (the state check and the capture must run "+
-			"concurrently, not sequentially)", elapsed, 2*delay)
 	}
 }
 

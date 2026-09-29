@@ -1,6 +1,6 @@
 # Safety model
 
-creality_k2_mcp hands a fair amount of control over a physical, heated
+creality-k2-mcp hands a fair amount of control over a physical, heated
 machine to an AI. This page explains, in plain terms, how it is designed so
 that a mistake, a confused model, or a bug is very unlikely to break a
 running print, damage the printer, or leave a heater running unattended.
