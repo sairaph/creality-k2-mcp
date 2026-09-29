@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -298,18 +299,29 @@ func TestAvailable_ResumeWithoutARecordIsBlockedWithTheExecuteReason(t *testing.
 }
 
 func TestAvailable_CancelInTheWindowSaysTheSameAsExecute(t *testing.T) {
-	f, p, printer, _ := startedFixture(t, "m3-cancel")
-	snap := printerstate.Take(context.Background(), f.deps().stateDeps(), printer)
-	g := gateStatus(t, p.Available(printer, snap, testSettings()), ActionCancelPrint)
-	_, err := exec(p, f, printer, ActionCancelPrint, Params{}, "")
-	perr := wantErr(t, err, CodeUnavailable, "stop it on the printer screen")
-	if g.Status != "blocked" || g.Reason != perr.Message {
-		t.Fatalf("gate %q %q vs Execute %q", g.Status, g.Reason, perr.Message)
+	for _, verified := range []bool{true, false} {
+		old := stopDuringStartVerified
+		stopDuringStartVerified = verified
+		t.Cleanup(func() { stopDuringStartVerified = old })
+		f, p, printer, _ := startedFixture(t, fmt.Sprintf("m3-cancel-%v", verified))
+		snap := printerstate.Take(context.Background(), f.deps().stateDeps(), printer)
+		g := gateStatus(t, p.Available(printer, snap, testSettings()), ActionCancelPrint)
+		_, err := exec(p, f, printer, ActionCancelPrint, Params{}, "")
+		if verified {
+			if err != nil || g.Status != "needs_confirmation" {
+				t.Fatalf("verified: gate %q %q, Execute err %v", g.Status, g.Reason, err)
+			}
+		} else {
+			perr := wantErr(t, err, CodeUnavailable, "stop it on the printer screen")
+			if g.Status != "blocked" || g.Reason != perr.Message {
+				t.Fatalf("unverified: gate %q %q vs Execute %q", g.Status, g.Reason, perr.Message)
+			}
+		}
 	}
 	// An ordinary START_PRINT prepare phase (print_stats printing) is not the window.
 	f2, p2, printer2 := cfsSetup(t, "m3-cancel2")
 	f2.setPreparing("model.gcode")
-	snap = printerstate.Take(context.Background(), f2.deps().stateDeps(), printer2)
+	snap := printerstate.Take(context.Background(), f2.deps().stateDeps(), printer2)
 	if g := gateStatus(t, p2.Available(printer2, snap, testSettings()), ActionCancelPrint); g.Status != "needs_confirmation" {
 		t.Fatalf("cancel in the ordinary prepare phase = %q, want needs_confirmation", g.Status)
 	}
@@ -320,7 +332,7 @@ func TestAvailable_CancelInTheWindowSaysTheSameAsExecute(t *testing.T) {
 func TestStartWindow_FeedingDuringTheWindowStaysInTheWindow(t *testing.T) {
 	f, p, printer, _ := startedFixture(t, "m3-feed")
 	f.setSelfTest(100)
-	f.cfs9999(func(c *fakeCFS) { c.resetMap() })
+	f.cfs9999(func(c *fakeCFS) { c.resetMap(); c.state = 0 })
 	f.setFeedState(2)
 	snap := printerstate.Take(context.Background(), f.deps().stateDeps(), printer)
 	d := p.Derive(snap)
@@ -350,9 +362,14 @@ func TestSetFilament_CatalogEntryWithoutATypeOrNameIsRefused(t *testing.T) {
 
 // --- the three verification switches stay off together (safety test gap 7) ---
 
-func TestVerificationSwitchesAreOffByDefault(t *testing.T) {
-	if sideSpoolEditVerified || spoolStartVerified || stopDuringStartVerified {
-		t.Fatalf("a verification switch is on: side spool edit %v, spool start %v, stop in window %v; flip them only after the supervised hardware session",
-			sideSpoolEditVerified, spoolStartVerified, stopDuringStartVerified)
+// The switches verified in the supervised session (2026-09-29) are on; the spool
+// start stays off: with a CFS connected the side spool is not in the feed path
+// and it could not be tested.
+func TestVerificationSwitchesMatchWhatWasVerifiedOnHardware(t *testing.T) {
+	if !sideSpoolEditVerified || !stopDuringStartVerified {
+		t.Fatalf("side spool edit %v, stop in window %v: both were verified live and must be on", sideSpoolEditVerified, stopDuringStartVerified)
+	}
+	if spoolStartVerified {
+		t.Fatal("spoolStartVerified must stay off: it could not be verified on hardware")
 	}
 }

@@ -62,7 +62,7 @@ func registerControlTools(s *Server) {
 
 	registerTool(s, domain.ToolInfo{Name: "pause_print", Category: domain.ToolCategoryControl}, &mcp.Tool{
 		Name: "pause_print",
-		Description: "Pauses the current print. Only available while printing (not during START_PRINT's own " +
+		Description: "Pauses the current print. Does not wait for the whole PAUSE routine (about 17-20 s on a K2): it returns effect confirmed once the job reports paused, or pausing as soon as the printer is parking and wiping, and cancel_print stays available meanwhile. Only available while printing (not during START_PRINT's own " +
 			"prepare/heat/home sequence, where pausing is unverified and blocked). The printer's PAUSE macro " +
 			"drops the nozzle target to 140 C and, if the toolhead is homed, lifts it, moves to the purge/clean " +
 			"position, wipes the nozzle and parks; the part and auxiliary fans turn off. Sends immediately with " +
@@ -81,7 +81,7 @@ func registerControlTools(s *Server) {
 			"restores the stored part and auxiliary fan speeds. The token expires after 120 seconds and is " +
 			"invalidated if the printer's state changes before it is used (a conflict error names what changed); " +
 			"call again with no confirm_token for a fresh proposal in that case. Related: get_printer_status to " +
-			"see the stored targets beforehand, pause_print, cancel_print to stop instead. With a CFS connected it is allowed only for a clean pause this server issued, with the CFS still reading clean and nothing changed at the printer; otherwise resume on the printer screen or in Creality Print.",
+			"see the stored targets beforehand, pause_print, cancel_print to stop instead. With a CFS connected it is allowed only for a clean pause this server issued, with the CFS still reading clean and nothing changed at the printer; otherwise resume on the printer screen or in Creality Print. The reply does not wait for the RESUME routine (reheat, purge, wipe, about 1-2 minutes): it returns effect resuming (or confirmed if already printing); follow it with get_printer_status, and cancel_print stays available meanwhile.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false},
 	}, resumePrintHandler(s))
 
@@ -93,7 +93,7 @@ func registerControlTools(s *Server) {
 			"END_PRINT macro runs (lifts, retracts if hot, turns off heaters and fans, parks) and the EEPROM " +
 			"power-loss-recovery slot is cleared, a genuine physical write. This cannot be undone: the job " +
 			"cannot be resumed after this. Related: pause_print to stop temporarily instead, get_current_job to " +
-			"check progress before deciding. Cancel is never blocked by a CFS signal, but during the self-test right after a print start (state preparing while the job is still standby) a cancel from this server is refused: stop it on the printer screen.",
+			"check progress before deciding. Cancel is never blocked by a CFS signal, but during the self-test right after a print start (state preparing while the job is still standby) cancel_print sends Creality's own 9999 stop instead of Moonraker's cancel (which does not stop the self-test) and returns effect stopping: the printer finishes its current self-test step (about 20 s), turns the heaters off and returns to idle within about a minute.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: false},
 	}, cancelPrintHandler(s))
 
@@ -380,6 +380,11 @@ func controlBody(res policy.Result) string {
 		b.WriteString("\n\nDo not simply retry. The colour map was already sent, so the printer may keep it until the next start, and get_printer_status may then show preparing with no print running: if it does, the leftover map is the cause; clear it or start the print on the printer, then request a fresh proposal. If get_printer_status shows idle, a fresh proposal is safe.")
 		return b.String()
 	case "not_sent":
+		if res.Action == policy.ActionCancelPrint {
+			fmt.Fprintf(&b, "%s: the 9999 stop frame could not be sent, so nothing was stopped.", res.Action)
+			appendEffects(&b, res.Effects)
+			return b.String()
+		}
 		fmt.Fprintf(&b, "%s was NOT started: the start frame could not be sent.", res.Action)
 		appendEffects(&b, res.Effects)
 		b.WriteString("\n\nCall get_printer_status to see the printer's state before trying again; if the colour map was sent the printer may keep it until the next start and show preparing with no print running.")
@@ -408,7 +413,17 @@ func controlBody(res policy.Result) string {
 		fmt.Fprintf(&b, "%s was sent to %s and accepted, but the expected result was not observed within the "+
 			"settle timeout. Call get_printer_status to check the current state before deciding whether to "+
 			"retry; a lost confirmation does not necessarily mean the write failed.", res.Action, res.Printer.Name)
+	case "stopping":
+		fmt.Fprintf(&b, "%s: the stop was sent to %s during the print start and the printer is stopping. It is not stopped yet: it winds down over about a minute, so follow it with get_printer_status.", res.Action, res.Printer.Name)
+	case "pausing":
+		fmt.Fprintf(&b, "%s was sent to %s and the printer is pausing: it is parking and wiping the nozzle and will report paused shortly. Follow it with get_printer_status; cancel_print is available meanwhile.", res.Action, res.Printer.Name)
+	case "resuming":
+		fmt.Fprintf(&b, "%s was sent to %s and the printer is resuming: the RESUME routine (reheat, purge, wipe) is running and the job is not printing yet. Follow it with get_printer_status; cancel_print is still available.", res.Action, res.Printer.Name)
 	case "sent":
+		if res.Action == policy.ActionCancelPrint {
+			fmt.Fprintf(&b, "%s: the 9999 stop frame was sent to %s during the print start, but the printer has not yet shown that it is stopping. Follow it with get_printer_status.", res.Action, res.Printer.Name)
+			break
+		}
 		fmt.Fprintf(&b, "%s was sent to %s: the map was verified and the start frame was written. The printer is not printing yet: "+
 			"it runs a self-test for several minutes with the job still standby. Follow it with get_printer_status; it is not "+
 			"confirmed that the print began.", res.Action, res.Printer.Name)

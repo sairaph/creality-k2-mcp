@@ -64,7 +64,7 @@ func registerFilamentTools(s *Server) {
 			"persistent until changed again. Only available while the printer is idle and the CFS is quiescent; a " +
 			"slot with an RFID-tagged spool, an undefined or not-ready slot, a slot being written, or the slot " +
 			"currently selected at the filament hub is refused with the reason (get_filaments shows editable and " +
-			"why_not per slot). Editing the side spool is not yet verified on this firmware and is refused. Sends " +
+			"why_not per slot). The side spool can be edited too (verified on hardware). Sends " +
 			"immediately with no confirm_token and reads the result back from both the printer and Moonraker: effect " +
 			"confirmed means both agree, unconfirmed shows what each channel reports, no_change means the slot " +
 			"already held that definition. Related: get_filaments, list_filament_catalog.",

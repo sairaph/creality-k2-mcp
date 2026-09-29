@@ -171,7 +171,20 @@ func startWindowSignal(snap Snapshot) (bool, string) {
 	if prev != "standby" && prev != "complete" && prev != "cancelled" {
 		return false, ""
 	}
+	// 9999 state 9, 1 or 7 with print_stats STANDBY is a start (another client's,
+	// or one whose record this process lacks): observed live, state 9 then 1 within
+	// a second of a CFS start frame while print_stats stayed standby for the whole
+	// self-test; 7 (stopping) is the wind-down after a stop frame during it. Only
+	// standby: what 9999 reads after a natural completion or a Moonraker cancel was
+	// never captured, and Klipper keeps complete or cancelled until the next job, so
+	// a lingering 1 or 7 there would be a permanent false "preparing". The
+	// withSelfTest and box.map signals below cover a real start over a stale
+	// complete or cancelled. State 4 (aborted) persists at rest and is never a signal.
+	if st := snap.WS9999.State; st.Present && prev == "standby" && (st.Value == 1 || st.Value == 9 || st.Value == 7) {
+		return true, fmt.Sprintf("print_stats.state is standby while 9999 state is %d (a print start or its stop is in progress)", st.Value)
+	}
 	if st := snap.WS9999.WithSelfTest; st.Present && st.Value != 100 {
+
 		return true, fmt.Sprintf("print_stats.state is %s while 9999 withSelfTest is %d, not 100 (a print start's self-test is running)", prev, st.Value)
 	}
 	if snap.Box != nil {

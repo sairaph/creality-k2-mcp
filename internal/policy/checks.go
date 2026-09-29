@@ -14,7 +14,12 @@ import (
 // connected. set_light bypasses the bucket part (it has its own rule in
 // checkGate); every other action calls this first.
 func checkBucketAndCFS(spec actionSpec, derived printerstate.Derived) *Error {
-	if !spec.AllowedBuckets[derived.Bucket] {
+	// Cancel is allowed while resuming or pausing (bucket T, the RESUME or PAUSE
+	// macro running): it queues behind the macro, and stopping must never be
+	// blocked (supervised session 2026-09-29). It is an explicit exception, not a
+	// bucket change: cancelling (a cancel this server already issued) stays refused.
+	cancelDuringMacro := spec.Name == ActionCancelPrint && (derived.State == printerstate.StateResuming || derived.State == printerstate.StatePausing)
+	if !spec.AllowedBuckets[derived.Bucket] && !cancelDuringMacro {
 		return &Error{
 			Action: spec.Name,
 			Code:   CodeUnavailable,

@@ -618,6 +618,12 @@ func (e MaterialEdit) confirms(b BoxsInfo) bool {
 	if slot.EditStatus == nil || *slot.EditStatus != 1 {
 		return false
 	}
+	// The side spool is never in a same_material group (supervised session
+	// 2026-09-29: rfid, colour and editStatus 1 confirm it; the first push has
+	// editStatus 0 as for a CFS slot), so only CFS slots need the regrouping.
+	if e.BoxType == 1 {
+		return true
+	}
 	if !b.SameMaterialOK {
 		return false
 	}

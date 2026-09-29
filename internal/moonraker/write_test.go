@@ -2,9 +2,12 @@ package moonraker
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPrintStartSendsFilenameQueryParam(t *testing.T) {
@@ -81,5 +84,46 @@ func TestPrintEndpointsAcceptOkRegardlessOfState(t *testing.T) {
 	c := New(ts.URL, "")
 	if err := c.PrintResume(context.Background()); err != nil {
 		t.Fatalf("PrintResume against an idle fake printer: %v", err)
+	}
+}
+
+type deadlineRecorder struct{ remaining time.Duration }
+
+func (d *deadlineRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
+	if dl, ok := r.Context().Deadline(); ok {
+		d.remaining = time.Until(dl)
+	}
+	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{"result": "ok"}`)), Request: r}, nil
+}
+
+// Supervised session 2026-09-29: Moonraker answers pause, resume and cancel only
+// after the whole macro has run (the K2 PAUSE took about 17 s and timed out at
+// the 10 s status timeout although it paused). They get the lifecycle timeout;
+// PrintStart keeps the short one.
+func TestLifecycleWritesUseTheLongTimeout(t *testing.T) {
+	for name, call := range map[string]func(*Client) error{
+		"pause":  func(c *Client) error { return c.PrintPause(context.Background()) },
+		"resume": func(c *Client) error { return c.PrintResume(context.Background()) },
+		"cancel": func(c *Client) error { return c.PrintCancel(context.Background()) },
+	} {
+		rec := &deadlineRecorder{}
+		c := New("http://127.0.0.1:1", "")
+		c.http = &http.Client{Transport: rec}
+		if err := call(c); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if rec.remaining < 60*time.Second || rec.remaining > timeoutLifecycle {
+			t.Errorf("%s: deadline %s away, want about %s", name, rec.remaining, timeoutLifecycle)
+		}
+	}
+	if timeoutLifecycle <= timeoutStatus {
+		t.Fatal("the lifecycle timeout must exceed the status timeout")
+	}
+	rec := &deadlineRecorder{}
+	c := New("http://127.0.0.1:1", "")
+	c.http = &http.Client{Transport: rec}
+	if err := c.PrintStart(context.Background(), "a.gcode"); err != nil || rec.remaining > timeoutStatus {
+		t.Fatalf("PrintStart: %v, deadline %s", err, rec.remaining)
 	}
 }

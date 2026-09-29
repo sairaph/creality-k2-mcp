@@ -146,9 +146,17 @@ is built into this server; names always come from the printer).
 **What stays at the printer**
 
 - Clearing a CFS error or runout, RFID-tagged spools, loading and unloading
-  filament, changing the nozzle temperature or flow during a CFS print, editing the
-  side spool (not yet verified), and stopping a print during its start self-test
-  (not yet verified from here).
+  filament, changing the nozzle temperature or flow during a CFS print, and starting a
+  print from the side spool while a CFS is connected (not verified: with a CFS the side
+  spool is not in the feed path).
+
+**Verified on a real printer** (supervised session, 2026-09-29): a CFS start with a
+  requested map, stopping during the start self-test, pause and resume of a CFS print, and
+  editing the side spool (edit and restore, confirmed on both channels). Pause and resume
+  are slow on a K2: the pause takes about 17 s, and a resume runs the whole RESUME routine
+  (reheat, purge, wipe) for 1-2 minutes, so `resume_print` replies `resuming` and you follow
+  it with `get_printer_status`. Cancelling during the start self-test sends Creality's own
+  stop and the printer is idle about a minute later.
 
 **What the server cannot detect** (so it asks you): a tool change during a print,
 whether a slot physically holds filament, and a spool being pre-loaded or an RFID

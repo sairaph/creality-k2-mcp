@@ -443,6 +443,14 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 	}
 
 	afterSnap, afterDerived, confirmed := p.pollUntilSettle(ctx, deps, printer, locks, pendingKind, spec.SettleTimeout, settleFuncFor(spec.Name, params))
+	// A cancel whose HTTP call failed with a transport error or timeout (Moonraker
+	// answers only after the macro) but whose effect the settle poll then confirmed
+	// did reach the printer: count it as accepted. Never for an HTTP status
+	// rejection, and never for the setpoint actions, whose target may already hold
+	// before the send (final review M3).
+	if spec.Name == ActionCancelPrint && confirmed && isTransportError(sendErr) {
+		accepted = true
+	}
 
 	result := Result{
 		Action:   spec.Name,
@@ -456,13 +464,6 @@ func (p *Policy) sendPolled(ctx context.Context, deps Deps, printer domain.Print
 		Job:      printerstate.JobIdentityFrom(afterSnap),
 	}
 	if accepted {
-		if spec.Name == ActionPausePrint && confirmed {
-			recordPause(ctx, deps, locks.pl, afterSnap, afterDerived)
-		}
-		if spec.Name == ActionPausePrint && derived.CFSConnected {
-			result.Effects = append(result.Effects, pauseRecordNote(locks.pl.getPauseRec() != nil))
-		}
-
 		if arm := idleHeatArmFor(spec.Name, params, derived, settings, identity, printer); arm != nil {
 			result.IdleHeatArm = arm
 		}

@@ -501,6 +501,9 @@ func (p *Policy) sendStartCFS(ctx context.Context, deps Deps, printer domain.Pri
 		sent, err = deps.WS9999.StartCFSPrint(ctx, b.path, b.items, b.selfTest, verify)
 	}
 	result.Commands = commands
+	if sent || errors.As(err, new(*crealityws.StartFrameError)) {
+		locks.pl.markStartSent()
+	}
 
 	var mismatch *mapMismatchError
 	var ambiguous *crealityws.StartFrameError
@@ -591,12 +594,25 @@ func startCommands(b *binding) []string {
 	return []string{"colorMatch (port 9999)", "multiColorPrint (port 9999)"}
 }
 
+// stopWaitTimeout and stopPollInterval bound how long the stop reply waits for
+// the printer to show it is stopping (9999 state 7) or stopped (4): the stop
+// takes effect after about 20 s (the current self-test step finishes first), so
+// the reply only waits for the first sign, not for the wind-down. Variables so
+// tests do not wait real seconds.
+var (
+	stopWaitTimeout  = 15 * time.Second
+	stopPollInterval = 500 * time.Millisecond
+)
+
 // sendStopInWindow cancels during the start window with Creality's own 9999
-// stop (plan 8a.1). It is reached only when stopDuringStartVerified is true
-// (evaluateParams refuses otherwise): print_stats has no job yet during the
-// self-test, so a Moonraker cancel is not known to stop it. The start-window
-// record is cleared once the stop frame is sent, and the result is confirmed
-// when the printer stops deriving as preparing.
+// stop (plan 8a.1), verified live 2026-09-29. It is reached when
+// stopDuringStartVerified is true and the derived state is the start window:
+// print_stats has no job yet during the self-test, so a Moonraker cancel is not
+// known to stop it. The start-window record is cleared once the stop frame is
+// sent. The reply returns as soon as 9999 state reads 7 (stopping) or 4
+// (aborted), up to stopWaitTimeout, with Effect "stopping"; if neither is seen
+// the frame was still sent and the Effect is "sent". It does not wait for the
+// wind-down (about a minute) and does not hold the lock for it.
 func (p *Policy) sendStopInWindow(ctx context.Context, deps Deps, printer domain.Printer, spec actionSpec, snap printerstate.Snapshot, derived printerstate.Derived, locks *acquiredLocks) (Result, error) {
 	before := printerstate.BuildStateBlock(snap, derived, nil)
 	locks.pl.setPending(&printerstate.PendingAction{Kind: printerstate.PendingCancel, IssuedAt: time.Now(), Timeout: spec.SettleTimeout})
@@ -604,19 +620,60 @@ func (p *Policy) sendStopInWindow(ctx context.Context, deps Deps, printer domain
 
 	sent, err := deps.WS9999.Stop(ctx)
 	accepted := sent && err == nil
-	if accepted {
-		locks.pl.setStartRec(nil)
+	result := Result{
+		Action: spec.Name, Accepted: accepted, Effect: "sent",
+		Commands: []string{"stop (port 9999)"}, Before: before, Printer: printer,
 	}
-	afterSnap, afterDerived, confirmed := p.pollUntilSettle(ctx, deps, printer, locks, printerstate.PendingCancel, spec.SettleTimeout,
-		func(_ printerstate.Snapshot, d printerstate.Derived) bool {
-			return accepted && d.State != printerstate.StatePreparing
-		})
-	return Result{
-		Action: spec.Name, Accepted: accepted, Effect: effectString(confirmed),
-		Effects:  []string{"cancel during the print start: the 9999 stop message was sent (Creality's own Stop), because print_stats has no job yet"},
-		Commands: []string{"stop (port 9999)"}, Before: before, After: printerstate.BuildStateBlock(afterSnap, afterDerived, nil),
-		Printer: printer, Job: printerstate.JobIdentityFrom(afterSnap),
-	}, nil
+	if !accepted {
+		result.Effect = "not_sent"
+		msg := "the 9999 stop frame was not sent"
+		if err != nil {
+			msg += ": " + err.Error()
+		}
+		result.Effects = []string{msg + ". Stop the print on the printer screen."}
+	} else {
+		// State 7 (stopping) is always a sign. State 4 (aborted) persists at rest
+		// from an earlier stop, so it only counts once a state other than 4 was seen
+		// after the frame (final review m1); a stale 4 alone gives Effect sent.
+		seen, sawOther := false, false
+		deadline := time.Now().Add(stopWaitTimeout)
+		for !seen {
+			rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			st, rerr := deps.WS9999.ReadStatus(rctx)
+			cancel()
+			if rerr == nil && st.State.Present {
+				switch {
+				case st.State.Value == 7, st.State.Value == 4 && sawOther:
+					seen = true
+				case st.State.Value != 4:
+					sawOther = true
+				}
+				if seen {
+					break
+				}
+			}
+			if time.Now().After(deadline) || ctx.Err() != nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+			case <-time.After(stopPollInterval):
+			}
+		}
+		if seen {
+			// The printer is stopping: the start record has done its job. A stale 4 alone
+			// (Effect sent) keeps the record until the 9999 state moves.
+			locks.pl.setStartRec(nil)
+			result.Effect = "stopping"
+		}
+		result.Effects = []string{"cancel during the print start: the 9999 stop message was sent (Creality's own Stop), because print_stats has no job yet. " +
+			"The printer finishes its current self-test step (about 20 s), turns the heaters off and returns to idle within about a minute; follow with get_printer_status"}
+	}
+	afterSnap := printerstate.Take(ctx, deps.stateDeps(), printer)
+	afterDerived := deriveFor(locks.pl, afterSnap, nil)
+	result.After = printerstate.BuildStateBlock(afterSnap, afterDerived, nil)
+	result.Job = printerstate.JobIdentityFrom(afterSnap)
+	return result, nil
 }
 
 // flowNoteFor discloses the flow reset of a start (D7): the flow factor is set

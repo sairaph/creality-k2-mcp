@@ -41,6 +41,11 @@ type printerLock struct {
 	// pending, are NOT cleared when a call returns.
 	startRec *startInFlight
 	pauseRec *pauseRecord
+
+	// resumeFlight and pauseFlight track a resume or pause whose POST is still
+	// running or whose macro has not finished (flight.go).
+	resumeFlight *flightRec
+	pauseFlight  *flightRec
 }
 
 func (l *printerLock) setPending(p *printerstate.PendingAction) {
@@ -82,8 +87,9 @@ func (r *lockRegistry) get(identity string) *printerLock {
 // cross-process) so a single deferred release call can drop both in the
 // right order.
 type acquiredLocks struct {
-	pl    *printerLock
-	flock *flock.Flock
+	pl       *printerLock
+	flock    *flock.Flock
+	released bool
 }
 
 // release drops the cross-process lock first, then the in-process mutex,
@@ -91,9 +97,10 @@ type acquiredLocks struct {
 // caller is expected to have already cleared it once settle/timeout
 // resolved).
 func (a *acquiredLocks) release() {
-	if a == nil {
+	if a == nil || a.released {
 		return
 	}
+	a.released = true
 	if a.flock != nil {
 		_ = a.flock.Unlock()
 		_ = a.flock.Close()

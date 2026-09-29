@@ -245,24 +245,32 @@ Why:
 After a start frame the printer runs a self-test of several minutes with the job
 still reported as standby (or as the previous job's complete or cancelled). Without
 care that would look like an idle printer. Two things cover it: the printer's own
-signals (self-test progress not finished, or a filament map that is not the identity
-map, while print_stats is standby, complete or cancelled) derive `preparing`, and this
-server keeps an in-memory record of a start it sent. The record ends after 15 minutes,
-or when print_stats shows printing, paused or error, or complete or cancelled for a
-different job (a different filename, metadata uuid or start time; a new printer print
-id alone does not end it).
+signals derive `preparing`, and this server keeps an in-memory record of a start it
+sent. The signals, with print_stats standby, complete or cancelled: the 9999 state
+reading 9 or 1 (a start in progress; observed live within a second of the start frame),
+7 (stopping), the self-test progress not finished, or a filament map that is not the
+identity map. The record ends after 15 minutes, when print_stats shows printing, paused
+or error, when it shows complete or cancelled for a different job (a different filename,
+metadata uuid or start time; a new printer print id alone does not end it), or when the
+9999 state reads 3 or 4 (a stopped or failed start) in a snapshot taken a few seconds
+after the start frame. State 4 (aborted) persists at rest after a stop and is never read
+as busy.
 
 While the window is open the state is bucket `preparing`: every setpoint, slot edit and
 start is refused, and uploading over or deleting the file being started is refused;
-`set_light` and uploads or deletes of other files still work. Cancelling from this
-server during the window is refused with "stop it on the printer screen" (the actions
-list shows it blocked with that reason), because Moonraker's cancel is not known to stop
-the self-test and Creality's own stop message has not been verified on hardware.
+`set_light`, uploads or deletes of other files, and `cancel_print` still work.
+
+Cancelling during the window sends Creality's own 9999 stop instead of Moonraker's cancel,
+which does not stop the self-test (print_stats has no job yet). This was verified live: 9999
+state 7 (stopping) appears right after the frame, the printer finishes its current self-test
+step (about 20 s), turns the heaters off, returns the map to identity, and is idle about a
+minute after the frame. The reply returns as soon as state 7 or 4 shows (up to 15 s) with
+effect `stopping` (or `sent` if neither is seen) and does not wait for the wind-down.
 
 The record lives in one server process. A second MCP client, or a restart, does not
-see it: it still sees the printer's own signals, which cover the window once the
-self-test progress or the filament map shows, but not the first moments of a start. The
-CLI and the TUI likewise derive state from the printer's signals alone.
+see it: it still sees the printer's own signals, which cover the window from the moment
+the 9999 state changes, but not the very first instant of a start. The CLI and the TUI
+likewise derive state from the printer's signals alone.
 
 After a refused map (`refused_map_mismatch`) the colour map had already been sent, so the
 printer may keep a non-identity map until the next start and show `preparing` with
@@ -276,21 +284,58 @@ restore is the one flow write that bypasses the "no flow changes with a CFS" rul
 it puts back the user's own earlier value. Once the start frame was sent, or may have been,
 the flow stays at 100%.
 
-### Not yet verified on hardware
+### Pausing and resuming
 
-Three behaviours are implemented but stay off, each behind a switch in the code that
-is false until the supervised hardware session has exercised it (the release is cut after
-that session, which also has to confirm the resting self-test value and how the printer
-assigns its print id across a start):
+Moonraker answers pause, resume and cancel only after the whole macro has run, so on a K2
+the tools do not wait for it. A K2 pause takes about 17-20 s (park, wipe) and a resume runs
+the RESUME routine (reheat to the stored target, purge, wipe) for 60 to 75 s, both with the
+job still reported as printing or paused. Pause and resume therefore send their Moonraker
+request from a background task with a 120 s timeout, mark it in an in-flight record on the
+printer lock, and release the per-printer lock BEFORE the reply waits for the printer's
+first sign, so a cancel issued meanwhile is never answered with a conflict.
 
-- editing the side spool (`sideSpoolEditVerified`),
-- starting from the side spool with a CFS connected (`spoolStartVerified`),
-- cancelling during the start window with the 9999 stop (`stopDuringStartVerified`).
+- **Pause** replies `confirmed` once the job reports paused, or `pausing` as soon as 9999 shows
+  the PAUSE routine (state 5 or 6) within 30 s. While the record is active and the job is
+  still printing, the state is `pausing` (bucket T): every write is refused except
+  `cancel_print`, which queues behind the macro. The resume record (the clean-CFS pause record)
+  is made when a snapshot shows the pause settled, from the tool's own poll or from the next
+  call; the pause record ends when the job is paused, on a terminal print_stats state, or after
+  3 minutes.
+- **Resume** replies `confirmed` once the job is printing, or `resuming` as soon as 9999 shows
+  state 8 (the RESUME routine) within 20 s. The resume record makes the state `resuming` (bucket
+  T) while print_stats is still paused, whether or not 9999 shows anything, and also derives it
+  over a homing sub-phase (RESUME homes X/Y first). A second resume while it is active is
+  refused ("a resume is already in progress"), so a dropped 9999 frame can never lead to a
+  second reheat and purge. The record ends when the job is printing again, on a terminal
+  state, or after 5 minutes. 9999 state 8 while print_stats is paused also derives `resuming`
+  by itself (a resume started on the printer), and the status text then says the printer
+  reports it is resuming.
+- **Cancel** is allowed while pausing or resuming (an explicit exception; other writes stay
+  refused).
+- A send whose HTTP call fails is reported as such: an HTTP status rejection from Moonraker is
+  never promoted to accepted even if the printer happens to be paused (nothing is recorded); a
+  transport error or timeout leaves the effect unknown, so the printer state decides, and only
+  for cancel does a confirmed effect after such an error count as accepted.
+
+### Verified on hardware, and what is not
+
+Verified in the supervised session (2026-09-29): a CFS start with a requested map (the
+printer's map was exactly the requested one and returned to identity after the stop),
+stopping during the self-test, pause and resume of a CFS print, and editing the side
+spool (both channels confirmed). Each of these has a switch in the code that is now on:
+`stopDuringStartVerified` and `sideSpoolEditVerified`.
+
+Still off: `spoolStartVerified`, starting from the side spool with a CFS connected. With a
+CFS connected the side spool is not in the feed path, so it could not be tested; it stays
+refused. A tool change during a print was also observed live (see the next section).
 
 ### What cannot be detected
 
 These are not visible to the server, so it asks you instead of guessing: a tool
-change during a print (which is also why the nozzle and flow are refused), whether a
+change during a print (which is also why the nozzle and flow are refused: live, the extruder
+filament sensor and 9999 materialDetector1 flip while the old filament retracts, the printer
+itself raised the nozzle target to 265 then 270 C to flush, and feedState and deviceState did
+not change), whether a
 slot physically holds filament, and a spool being pre-loaded or an RFID scan in
 progress. Every mapping proposal says the slots cannot be checked for physical
 filament.
@@ -314,7 +359,7 @@ retrying, rather than just failing silently.
   status check.
 - No firmware or service restarts, no emergency stop.
 - No filament loading or unloading, no CFS error dismissal, and no editing of RFID-tagged
-  spools or (until verified) the side spool: those stay on the printer.
+  spools, and no start from the side spool with a CFS connected: those stay on the printer.
 
 See [tools.md](tools.md) for the exact parameters, state requirements and
 `confirm_token` behavior of every individual tool.

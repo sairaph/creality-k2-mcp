@@ -86,6 +86,20 @@ func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 		}
 	}
 
+	// Row 8a: resuming, signal-fed (supervised session 2026-09-29). The K2's
+	// RESUME macro (reheat, purge, wipe) runs for 60 to 75 s with print_stats
+	// still "paused" and pause_resume.is_paused still true; 9999 state 8 is that
+	// routine. Without this row the printer derives paused for the whole time and
+	// a second resume would be proposed under a running one. Bucket T, so every
+	// write is refused except the explicit cancel exception (cancel queues behind
+	// the macro; stopping must never be blocked). It is evaluated before the
+	// homing and calibrating rows because RESUME homes X/Y first when they are
+	// unhomed: cancel must stay allowed through that sub-phase too.
+	if snap.PrintStats != nil && snap.PrintStats.State == "paused" && snap.WS9999.State.Present && snap.WS9999.State.Value == 8 {
+		return transitioning(StateResuming, cfsOK, cfsReason,
+			"9999 state is 8 (the RESUME routine: reheat, purge, wipe) while print_stats is still paused")
+	}
+
 	// Row 4: homing.
 	if ok, reason := isHoming(snap); ok {
 		return busy(StateHoming, BucketB, cfsOK, reason, cfsReason)
@@ -404,7 +418,14 @@ func isCalibrating(snap Snapshot) (bool, string) {
 	if snap.CustomMacro != nil && snap.CustomMacro.LevelingCalibration != nil && *snap.CustomMacro.LevelingCalibration != 0 {
 		return true, "custom_macro.leveling_calibration is nonzero"
 	}
-	if snap.VirtualSDCard != nil && snap.VirtualSDCard.BedMeshCalibrateState != nil && *snap.VirtualSDCard.BedMeshCalibrateState {
+	// bed_mesh_calibate_state stays true for the whole print after the
+	// pre-print self-test levels the bed (observed live 2026-09-29, CFS print
+	// started with the self-test). A job that is printing or paused is
+	// therefore never "calibrating" because of this flag alone: otherwise the
+	// running print derives bucket B and pause/cancel become unavailable,
+	// which "stopping must never be blocked" forbids.
+	if snap.VirtualSDCard != nil && snap.VirtualSDCard.BedMeshCalibrateState != nil && *snap.VirtualSDCard.BedMeshCalibrateState &&
+		!jobPrintingOrPaused(snap) {
 		return true, "virtual_sdcard.bed_mesh_calibate_state is true"
 	}
 	if snap.WS9999.Raw != nil {
@@ -416,6 +437,12 @@ func isCalibrating(snap Snapshot) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+// jobPrintingOrPaused reports whether print_stats shows a job that is
+// printing or paused.
+func jobPrintingOrPaused(snap Snapshot) bool {
+	return snap.PrintStats != nil && (snap.PrintStats.State == "printing" || snap.PrintStats.State == "paused")
 }
 
 // truthy reports whether a raw decoded JSON value (float64, string or bool,

@@ -32,17 +32,30 @@ import (
 // minutes after issue).
 const startInFlightMaxAge = 15 * time.Minute
 
-// stopDuringStartVerified gates the 9999 stop used to cancel during the
-// start window (plan 8a.1). Moonraker's cancel is not known to stop the
-// self-test (print_stats has no job yet), so until the supervised session
-// verifies Creality's own {"stop":1}, cancel in the window is refused with
-// "stop it on the printer screen". It is a variable only so tests can
-// exercise the verified path; nothing in production assigns it.
-var stopDuringStartVerified = false
+// stopDuringStartVerified gates the 9999 stop used to cancel during the start
+// window (plan 8a.1). Moonraker's cancel is not known to stop the self-test
+// (print_stats has no job yet), but Creality's own {"stop":1} was verified live
+// in the supervised session (2026-09-29): 9999 state 7 (stopping) right after
+// the frame, the current self-test step finishes (about 20 s), the heater
+// targets go to 0, the map returns to identity and the printer is idle about a
+// minute after the frame. A variable only so tests can exercise both settings;
+// nothing in production assigns it.
+var stopDuringStartVerified = true
 
 // startWindowCancelRefusal is the one message for cancel during the start
 // window, used by the gate (so the actions list and Execute agree) and by the
 // parameter check.
+// startWindowStopEffects and startWindowStopCommands describe what a confirmed
+// cancel in the start window really does (the 9999 stop), for the proposal.
+var (
+	startWindowStopEffects = []string{
+		"sends Creality's own 9999 stop message, because print_stats has no job yet and Moonraker's cancel does not stop the self-test",
+		"the printer finishes its current self-test step (about 20 s), turns the heaters off, returns the filament map to identity and is idle within about a minute of the frame",
+		"the reply returns as soon as the printer shows it is stopping (9999 state 7 or 4) and does not wait for the wind-down; follow with get_printer_status",
+	}
+	startWindowStopCommands = []string{"stop (port 9999)"}
+)
+
 const startWindowCancelRefusal = "the printer is in its print-start self-test, where a cancel from this server is not known to stop it: stop it on the printer screen"
 
 // startInFlight is the record itself.
@@ -51,6 +64,11 @@ type startInFlight struct {
 	path     string
 	mapping  string
 	issuedAt time.Time
+	// sentAt is when the start frame was sent (or may have been); zero until then.
+	// The 9999 state 3 or 4 rule only applies after it (plus startStateGrace):
+	// state 4 persists at rest from an earlier stopped job and only flips to 9
+	// and 1 within about a second of the frame.
+	sentAt time.Time
 	// priorJob is the job identity at issue time. A stale "complete" or
 	// "cancelled" left over from the previous job must not end the record;
 	// only a settled state of a DIFFERENT job does.
@@ -61,6 +79,26 @@ func (l *printerLock) setStartRec(r *startInFlight) {
 	l.pendingMu.Lock()
 	defer l.pendingMu.Unlock()
 	l.startRec = r
+}
+
+// markStartSent stamps the current record with the time its start frame was
+// sent (or may have been).
+func (l *printerLock) markStartSent() {
+	l.pendingMu.Lock()
+	defer l.pendingMu.Unlock()
+	if l.startRec != nil {
+		l.startRec.sentAt = time.Now()
+	}
+}
+
+// startStateGrace is how long after the start frame a 9999 state of 3 or 4 is
+// still the stale value from before the start.
+const startStateGrace = 3 * time.Second
+
+func (l *printerLock) startSentAt(rec *startInFlight) time.Time {
+	l.pendingMu.Lock()
+	defer l.pendingMu.Unlock()
+	return rec.sentAt
 }
 
 func (l *printerLock) getStartRec() *startInFlight {
@@ -112,6 +150,14 @@ func (l *printerLock) activeStartRec(snap printerstate.Snapshot) *startInFlight 
 	if snap.Taken.Sub(rec.issuedAt) > startInFlightMaxAge {
 		l.clearStartRecIf(rec)
 		return nil
+	}
+	// A stopped or failed start (9999 state 3 or 4), seen in a snapshot taken after
+	// the start frame and its grace period, ends the record.
+	if st := snap.WS9999.State; st.Present && (st.Value == 3 || st.Value == 4) {
+		if sent := l.startSentAt(rec); !sent.IsZero() && snap.Taken.After(sent.Add(startStateGrace)) {
+			l.clearStartRecIf(rec)
+			return nil
+		}
 	}
 	if snap.PrintStats != nil {
 		switch snap.PrintStats.State {
@@ -169,6 +215,7 @@ func deriveFor(pl *printerLock, snap printerstate.Snapshot, pending *printerstat
 	derived := printerstate.DeriveActivityState(snap, pending)
 	pl.observePause(snap)
 	derived = applyStartWindow(derived, snap, pl.activeStartRec(snap))
+	derived = applyFlights(derived, snap, pl.activeResumeFlight(snap), pl.activePauseFlight(snap))
 	derived.PauseRecorded = pl.getPauseRec() != nil
 	return derived
 }

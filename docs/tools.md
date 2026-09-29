@@ -251,7 +251,7 @@ only.
   physically loaded in a slot cannot be detected, and the reply says so.
   `editable` and `why_not` combine the slot-level checks `set_filament_definition`
   applies (an RFID spool, an undefined or not-ready slot, a slot being written, the
-  slot selected at the hub, the side spool while unverified) with the printer's
+  slot selected at the hub; the side spool is editable, verified on hardware) with the printer's
   current state: while it is printing, the CFS is busy, a print start is in flight
   or control is off, every slot shows `editable: false` and `why_not` says which
   (`edit_blocked` carries the state reason).
@@ -374,9 +374,10 @@ While a CFS is connected, each control tool follows a rule (the reasons are in
 During the start window (the printer's self-test after a start, bucket `preparing`)
 every setpoint, slot edit and start is refused; `set_light` and uploads or
 deletes of files other than the one being started still work, the in-flight file is
-protected, and cancel from this server is refused with "stop it on the printer
-screen" until stopping there is verified on hardware (the actions list shows
-`cancel_print` blocked with that reason).
+protected, and `cancel_print` sends Creality's own 9999 stop (Moonraker's cancel does not
+stop the self-test): it returns effect `stopping` as soon as the printer shows 9999 state
+7 or 4, and the printer finishes its current step (about 20 s), turns the heaters off and
+is idle within about a minute.
 
 ### `start_print`
 
@@ -429,6 +430,10 @@ screen" until stopping there is verified on hardware (the actions list shows
 - **Confirm-token flow:** none, sends immediately.
 - **With a CFS connected:** the result says whether a resume record was kept (only when
   the CFS read clean when the pause settled); without one, resume on the printer screen.
+- **Reply:** does not wait for the whole PAUSE routine (about 17-20 s on a K2): effect `confirmed` once
+  the job reports paused, or `pausing` ("the printer is parking and wiping the nozzle and will report
+  paused shortly") as soon as the printer shows it is parking. While pausing only `cancel_print` is
+  allowed, and cancel is never blocked by the pause in flight.
 
 ### `resume_print`
 
@@ -441,6 +446,11 @@ screen" until stopping there is verified on hardware (the actions list shows
 - **Confirm-token flow:** required; the proposal shows the stored target and
   fan speeds it will restore. 120 second expiry; a state change before use
   invalidates it (`conflict`, naming what changed).
+- **Reply:** does not wait for Moonraker's answer (the K2's RESUME routine, reheat, purge and wipe,
+  takes 1-2 minutes): effect `resuming` with "resuming: the printer reheats to <stored target> C,
+  purges and wipes (about 1-2 minutes); follow with get_printer_status", or `confirmed` if it is
+  already printing. While resuming (a resume record, or 9999 state 8), only `cancel_print` is allowed;
+  a second `resume_print` is refused with "a resume is already in progress".
 
 ### `cancel_print`
 
@@ -533,7 +543,7 @@ screen" until stopping there is verified on hardware (the actions list shows
 - **State requirements:** idle only, with the CFS at rest. Refused, each with its
   own reason: a slot with an RFID spool, an undefined or not-ready slot, a slot being
   written, the slot selected at the filament hub, an entry with no temperature range
-  or an out-of-range pressure advance, and the side spool (not yet verified).
+  or an out-of-range pressure advance. The side spool can be edited (verified on hardware).
 - **Side effects:** rewrites the slot's stored definition (material, brand, name,
   colour, and that entry's nozzle range and pressure advance). Persistent until
   changed again; never moves filament. The printer regroups which slots auto-refill

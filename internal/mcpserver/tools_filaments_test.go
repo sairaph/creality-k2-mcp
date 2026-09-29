@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
 	"github.com/sairaph/creality_k2_mcp/internal/domain"
+	"github.com/sairaph/creality_k2_mcp/internal/policy"
 	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
 )
 
@@ -27,6 +28,7 @@ type cfsWorld struct {
 	files     []crealityws.GcodeFileInfo
 	boxMap    map[string]string
 	frames    []string
+	state     int // 9999 state: 1 after a start frame, 7 after a stop frame
 
 	// knobs for the failure outcomes
 	forceMap  map[string]string // the printer writes this map instead of the requested one
@@ -138,6 +140,12 @@ func (m *cfsMoon) QueryObjects(ctx context.Context, objects map[string][]string)
 	}
 	b, _ := json.Marshal(box)
 	out["box"] = b
+	for _, bx := range m.w.boxs.MaterialBoxs {
+		if bx.Type == 1 && len(bx.Materials) > 0 {
+			rack, _ := json.Marshal(map[string]any{"material_type": "0" + bx.Materials[0].RFID, "color_value": strings.TrimPrefix(bx.Materials[0].Color, "#")})
+			out["filament_rack"] = rack
+		}
+	}
 	var prm map[string]any
 	_ = json.Unmarshal(out["pause_resume"], &prm)
 	if prm == nil {
@@ -161,11 +169,12 @@ func (c *cfsWS) ReadStatus(ctx context.Context) (crealityws.Status, error) {
 		return crealityws.Status{}, fmt.Errorf("port 9999 unreachable")
 	}
 	p := func(v int) crealityws.Int { return crealityws.Int{Value: v, Present: true} }
+	state := c.w.state
 	cfs := 0
 	if c.w.connected {
 		cfs = 1
 	}
-	return crealityws.Status{State: p(0), DeviceState: p(0), FeedState: p(0), UpgradeStatus: p(0), RepoPlrStatus: p(0),
+	return crealityws.Status{State: p(state), DeviceState: p(0), FeedState: p(0), UpgradeStatus: p(0), RepoPlrStatus: p(0),
 		MaterialStatus: p(0), CfsConnect: p(cfs), Err: crealityws.StatusErr{Present: true}, WithSelfTest: p(100)}, nil
 }
 
@@ -243,6 +252,7 @@ func (c *cfsWS) StartCFSPrint(ctx context.Context, path string, items []creality
 		return false, &crealityws.StartFrameError{Err: fmt.Errorf("write timed out")}
 	}
 	c.w.frames = append(c.w.frames, "multiColorPrint")
+	c.w.state = 1
 	c.w.mu.Unlock()
 	return true, nil
 }
@@ -281,9 +291,9 @@ func TestGetFilaments_ShowsSlotsEditabilityAndRefillGroups(t *testing.T) {
 			t.Errorf("get_filaments reply missing %q:\n%s", want, text)
 		}
 	}
-	// The side spool is not editable until verified on hardware.
-	if !strings.Contains(text, "not yet verified on this firmware") {
-		t.Errorf("side spool editability reason missing:\n%s", text)
+	// The side spool edit was verified on hardware (2026-09-29): editable like a slot.
+	if strings.Contains(text, "not yet verified on this firmware") {
+		t.Errorf("the side spool is still reported as unverified:\n%s", text)
 	}
 }
 
@@ -404,8 +414,8 @@ func TestSetFilamentDefinition_RefusalsCarryAHint(t *testing.T) {
 		t.Fatalf("reply = %s", text)
 	}
 	res = call(t, cs, "set_filament_definition", map[string]any{"slot": "side_spool", "material": "99001", "color": "#ffffff"})
-	if text = replyText(res); !res.IsError || !strings.Contains(text, "not yet verified") {
-		t.Fatalf("side spool reply = %s", text)
+	if text = replyText(res); res.IsError || !strings.Contains(text, "effect: confirmed") {
+		t.Fatalf("side spool edit reply = %s", text)
 	}
 }
 
@@ -600,9 +610,17 @@ func TestStartWindowIsReflectedByEveryStateTool(t *testing.T) {
 	if !res.IsError || !strings.Contains(replyText(res), "preparing") {
 		t.Fatalf("set_bed_temperature in the window: %s", replyText(res))
 	}
+	// Cancel is offered in the window (the 9999 stop is verified): a proposal, then
+	// the stop frame, never Moonraker's cancel.
 	res = call(t, cs, "cancel_print", nil)
-	if !res.IsError || !strings.Contains(replyText(res), "stop it on the printer screen") {
-		t.Fatalf("cancel_print in the window: %s", replyText(res))
+	tok := extractYAMLValue(t, replyText(res), "confirm_token")
+	res = call(t, cs, "cancel_print", map[string]any{"confirm_token": tok})
+	text := replyText(res)
+	if res.IsError || !strings.Contains(text, "effect: stopping") || !strings.Contains(text, "returns to idle within about a minute") {
+		t.Fatalf("cancel_print in the window: %s", text)
+	}
+	if w.frames[len(w.frames)-1] != "stop" {
+		t.Fatalf("frames = %v, want the 9999 stop last", w.frames)
 	}
 }
 
@@ -799,7 +817,7 @@ func TestSetFilamentDefinition_ErrorHintsFitTheTool(t *testing.T) {
 	}{
 		"not found":     {map[string]any{"slot": "T1A", "material": "nope", "color": "#ffffff"}, "list_filament_catalog"},
 		"invalid input": {map[string]any{"slot": "T9Z", "material": "99001", "color": "#ffffff"}, "colour (#rrggbb)"},
-		"unavailable":   {map[string]any{"slot": "side_spool", "material": "99001", "color": "#ffffff"}, "get_filaments"},
+		"unavailable":   {map[string]any{"slot": "T2A", "material": "99001", "color": "#ffffff"}, "get_filaments"},
 	} {
 		text := replyText(call(t, cs, "set_filament_definition", tc.args))
 		if !strings.Contains(text, tc.want) {
@@ -846,7 +864,7 @@ func TestToolDescriptionsCarryTheRequiredGuidance(t *testing.T) {
 		"set_speed_factor":       "a filament change can reset it",
 		"resume_print":           "only for a clean pause this server issued",
 		"pause_print":            "whether a resume record was kept",
-		"cancel_print":           "stop it on the printer screen",
+		"cancel_print":           "Creality's own 9999 stop",
 		"exclude_object":         "read clean with no error",
 		"start_print":            "stays at 100% once the start frame was sent",
 	} {
@@ -875,7 +893,7 @@ func TestStartWindowActionsListBlocksCancelWithTheRealReason(t *testing.T) {
 	}
 	w.mu.Unlock()
 	text := replyText(call(t, cs, "get_printer_status", nil))
-	for _, want := range []string{"start_window: true", "stop it on the printer screen", "The printer is in the self-test of a print start"} {
+	for _, want := range []string{"start_window: true", "Creality's own stop", "The printer is in the self-test of a print start"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("status in the window missing %q:\n%s", want, text)
 		}
@@ -905,5 +923,34 @@ func TestBrandIsNotRepeatedWhenTheNameStartsWithIt(t *testing.T) {
 	edit := replyText(call(t, cs, "set_filament_definition", map[string]any{"slot": "T1A", "material": "99002", "color": "#123456"}))
 	if strings.Contains(edit, "Generic Generic") {
 		t.Errorf("edit result:\n%s", edit)
+	}
+}
+
+func (c *cfsWS) Stop(ctx context.Context) (bool, error) {
+	c.w.mu.Lock()
+	defer c.w.mu.Unlock()
+	c.w.frames = append(c.w.frames, "stop")
+	c.w.state = 7
+	return true, nil
+}
+
+// The stopping, resuming and cancel not_sent outcomes render their own bodies.
+func TestControlBodyForStoppingAndResuming(t *testing.T) {
+	printer := domain.Printer{Name: "K2"}
+	stop := controlBody(policy.Result{Action: policy.ActionCancelPrint, Printer: printer, Accepted: true, Effect: "stopping", Effects: []string{"wind down"}})
+	if !strings.Contains(stop, "the printer is stopping") || !strings.Contains(stop, "winds down over about a minute") || !strings.Contains(stop, "wind down") {
+		t.Errorf("stopping body: %s", stop)
+	}
+	sent := controlBody(policy.Result{Action: policy.ActionCancelPrint, Printer: printer, Accepted: true, Effect: "sent"})
+	if !strings.Contains(sent, "stop frame was sent") || strings.Contains(sent, "map was verified") {
+		t.Errorf("cancel sent body: %s", sent)
+	}
+	notSent := controlBody(policy.Result{Action: policy.ActionCancelPrint, Printer: printer, Effect: "not_sent"})
+	if !strings.Contains(notSent, "nothing was stopped") || strings.Contains(notSent, "NOT started") {
+		t.Errorf("cancel not_sent body: %s", notSent)
+	}
+	res := controlBody(policy.Result{Action: policy.ActionResumePrint, Printer: printer, Accepted: true, Effect: "resuming", Effects: []string{"resuming: the printer reheats to 250 C"}})
+	if !strings.Contains(res, "is resuming") || !strings.Contains(res, "not printing yet") || !strings.Contains(res, "cancel_print is still available") || !strings.Contains(res, "250 C") {
+		t.Errorf("resuming body: %s", res)
 	}
 }

@@ -76,7 +76,10 @@ func registerStatusTools(s *Server) {
 		Name: "list_console_messages",
 		Description: "Lists this printer's cached console output (server/gcode_store), newest first and " +
 			"paginated, with an optional count controlling how many recent lines are fetched from the printer " +
-			"before pagination (bounded to a sane maximum so a huge request cannot stall the call). Console " +
+			"before pagination (bounded to a sane maximum so a huge request cannot stall the call). Runs of periodic " +
+			"temperature reports (\"B:71.0 /70.0 T0:208.3 /250.0\", \"// cur_temp = 41.2\") collapse into one line, " +
+			"\"(N temperature reports, latest: <line>)\", counted within the fetched window only (a run cut by the " +
+			"count limit shows a smaller N, and the individual readings inside a run are not shown); every other line is kept. Console " +
 			"text is informational only: it is never used to gate a write, so a stale or unexpected line here " +
 			"never blocks or changes what another tool will do. Use this to see recent command responses, " +
 			"temperature reports or macro output, for example while diagnosing an unexpected state. Related: " +
@@ -309,9 +312,9 @@ func statusGuidance(block printerstate.StateBlock) string {
 		if block.StartWindow {
 			body = "The printer is in the self-test of a print start (several minutes, with the job still reported as " +
 				"standby, before it starts printing). Every write is refused during it except set_light and uploading or " +
-				"deleting files other than the one being started; cancel_print from this server is refused too, because " +
-				"Moonraker's cancel is not known to stop the self-test: stop it on the printer screen. Call " +
-				"get_printer_status again shortly to follow it."
+				"deleting files other than the one being started. cancel_print is available and sends Creality's own stop " +
+				"(Moonraker's cancel does not stop the self-test): the printer finishes its current self-test step (about 20 s), " +
+				"turns the heaters off and returns to idle within about a minute. Call get_printer_status again shortly to follow it."
 		} else {
 			body = "The printer is running START_PRINT's own prepare/heat/home sequence for a job that is about " +
 				"to begin printing. Writes are blocked except set_light and cancel_print (call cancel_print once with no " +
@@ -345,8 +348,13 @@ func statusGuidance(block printerstate.StateBlock) string {
 		body = "The printer is busy with a motion or calibration sequence started on the printer itself or by " +
 			"another client. Writes are blocked except set_light until it settles; call get_printer_status " +
 			"again shortly rather than retrying a write immediately."
-	case printerstate.StateCancelling, printerstate.StatePausing, printerstate.StateResuming:
-		body = "A pause, resume or cancel this server issued has not settled yet. Call get_printer_status " +
+	case printerstate.StateResuming:
+		body = resumingGuidance(block)
+	case printerstate.StatePausing:
+		body = "The printer is pausing: the PAUSE routine (park, wipe) takes about 20 s with the job still reported as printing. " +
+			"cancel_print is available meanwhile; every other write is refused until it reports paused. Call get_printer_status again shortly."
+	case printerstate.StateCancelling:
+		body = "A cancel this server issued has not settled yet. Call get_printer_status " +
 			"again in a few seconds to see the outcome before issuing another write."
 	case printerstate.StateFilamentOperation, printerstate.StateCFSOperation:
 		body = "The CFS or the extruder is moving filament (a load, unload or feed reported by the printer, or an operation this " +
@@ -724,6 +732,8 @@ func listConsoleMessagesHandler(s *Server) func(context.Context, *mcp.CallToolRe
 		for i, e := range entries {
 			newest[len(entries)-1-i] = e
 		}
+		// Runs of periodic temperature reports collapse to one line each.
+		newest = printerstate.CollapseTemperatureReports(newest, true)
 
 		page := 1
 		if in.Page != nil {
@@ -795,8 +805,8 @@ func inPrintGuidance(block printerstate.StateBlock) string {
 			"If the pause was made at the printer screen, by another program, or after a runout or error, resume on the printer screen or in Creality Print."
 	case printerstate.StatePreparing:
 		if block.StartWindow {
-			return " This is the start window: the CFS is part of the print start. Every write except set_light and uploads or deletes of other files is refused, " +
-				"and cancel_print from this server is refused too (stop it on the printer screen)."
+			return " This is the start window: the CFS is part of the print start. Every write except set_light, uploads or deletes of other files and cancel_print is refused; " +
+				"cancel_print sends Creality's own stop and the printer returns to idle within about a minute."
 		}
 		return " The print is preparing: cancel_print works and every setpoint is refused until it is printing."
 	default:
@@ -812,4 +822,24 @@ func reasonsText(reasons []string) string {
 		return ""
 	}
 	return " Reasons: " + strings.Join(reasons, "; ") + "."
+}
+
+// resumingGuidance words the resuming state by where the signal came from: a
+// resume this server sent (its in-flight record, reason "a resume this server
+// sent") or only the printer's own report (9999 state 8), for example a resume
+// started on the printer screen (final review m4).
+func resumingGuidance(block printerstate.StateBlock) string {
+	ours := false
+	for _, r := range block.Reasons {
+		if strings.Contains(r, "resume this server sent") || strings.Contains(r, "resume pending since") {
+			ours = true
+		}
+	}
+	who := "The printer reports it is resuming (its RESUME routine, started on the printer or by another program)"
+	if ours {
+		who = "A resume this server sent is running (the printer's RESUME routine)"
+	}
+	return who + ": it reheats to the stored target, purges and wipes for about 1-2 minutes with the job still reported as paused. " +
+		"cancel_print is available meanwhile (it queues behind the routine); every other write is refused until the job is printing. " +
+		"Call get_printer_status again shortly."
 }

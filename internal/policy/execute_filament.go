@@ -20,12 +20,13 @@ import (
 // per-slot refusal, a re-read and re-gate immediately before the write, and a
 // two-channel read-back (the confirming 9999 frame AND Moonraker).
 
-// sideSpoolEditVerified gates editing the side spool (boxId 0). The message
-// shape is the same as for a CFS slot but was not exercised live, so it is
-// refused in every release unless the supervised session verified it (plan
-// 3.3). A variable only so tests can exercise both settings; nothing in
-// production assigns it.
-var sideSpoolEditVerified = false
+// sideSpoolEditVerified gates editing the side spool (boxId 0, boxType 1). The
+// message shape is the same as for a CFS slot; it was verified live in the
+// supervised session (2026-09-29: edit and restore, confirmed on both
+// channels; the side spool is never in a same_material group, which
+// crealityws.MaterialEdit.Confirms accounts for). A variable only so tests can
+// exercise both settings; nothing in production assigns it.
+var sideSpoolEditVerified = true
 
 // moonrakerReadbackTimeout and moonrakerReadbackInterval bound the Moonraker
 // half of the read-back (plan 3.3 step 6: poll up to 3 s). Variables so the
@@ -273,7 +274,7 @@ func (p *Policy) executeSetFilament(ctx context.Context, deps Deps, printer doma
 		return Result{}, e
 	}
 
-	// Cheap parameter validation and the always-refused side spool, before
+	// Cheap parameter validation and the side spool switch, before
 	// anything touches the printer.
 	target, terr := parseFilamentTarget(params.Slot)
 	if terr != nil {

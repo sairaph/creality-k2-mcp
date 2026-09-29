@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
 	"github.com/sairaph/creality_k2_mcp/internal/domain"
@@ -83,6 +84,20 @@ type fakePrinter struct {
 
 	// failTemplate makes RunTemplate fail (the M221 reset failure case).
 	failTemplate bool
+	// resumeMacro makes PrintResume behave like the K2: 9999 state 8 for the
+	// duration and the HTTP answer only after the macro (until resumeRelease closes).
+	resumeMacro bool
+	// resumeNoState keeps 9999 silent during the macro (a dropped frame or reconnect).
+	resumeNoState bool
+	// resumeErrAfter makes PrintResume fail with resumeErr only after this delay.
+	resumeErrAfter time.Duration
+	// pauseMacro makes PrintPause behave like the K2: 9999 state 5 while parking and
+	// wiping, the HTTP answer (and print_stats paused) only after pauseRelease closes.
+	pauseMacro    bool
+	pauseRelease  chan struct{}
+	resumeRelease chan struct{}
+	resumeErr     error
+	pauseErr      error
 	// templateCalls counts every RunTemplate call (M221, heaters, fans...).
 	templateCalls int
 
@@ -400,6 +415,17 @@ func (f *fakePrinter) PrintPause(ctx context.Context) error {
 	if f.mute {
 		return nil
 	}
+	if f.pauseMacro {
+		f.cfs.state = 5
+		rel := f.pauseRelease
+		f.mu.Unlock()
+		<-rel
+		f.mu.Lock()
+		f.isPaused = true
+		f.printState = "paused"
+		f.storedHotendTemp = f.nozzleTarget
+		return nil
+	}
 	if f.isPaused {
 		return nil // pause_resume.py: "Print already paused", idempotent
 	}
@@ -414,7 +440,7 @@ func (f *fakePrinter) PrintPause(ctx context.Context) error {
 	}
 	f.storedFan0, f.storedFan2 = f.fan0, f.fan2
 	f.fan0, f.fan2 = 0, 0
-	return nil
+	return f.pauseErr // set by a test to model Moonraker answering after the macro
 }
 
 // PrintResume implements RESUME (gcode_macro.cfg:844-916):
@@ -423,6 +449,28 @@ func (f *fakePrinter) PrintPause(ctx context.Context) error {
 // (10-hazard-analysis.md 2.4, confirmed live catastrophic-class hazard).
 func (f *fakePrinter) PrintResume(ctx context.Context) error {
 	f.mu.Lock()
+	if f.resumeErr != nil {
+		f.printResumeCalls++
+		err, after := f.resumeErr, f.resumeErrAfter
+		f.mu.Unlock()
+		time.Sleep(after)
+		return err
+	}
+	if f.resumeMacro {
+		f.printResumeCalls++
+		if !f.resumeNoState {
+			f.cfs.state = 8
+		}
+		rel := f.resumeRelease
+		f.mu.Unlock()
+		<-rel // the HTTP answer only comes after the macro
+		f.mu.Lock()
+		f.cfs.state = 1
+		f.isPaused = false
+		f.printState = "printing"
+		f.mu.Unlock()
+		return nil
+	}
 	defer f.mu.Unlock()
 	f.printResumeCalls++
 	if f.mute {
@@ -597,8 +645,12 @@ func (f *fakePrinter) ReadStatus(ctx context.Context) (crealityws.Status, error)
 		}
 		return crealityws.Int{Value: v, Present: true}
 	}
+	stateNow := c.state
+	if len(c.stateSeq) > 0 {
+		stateNow, c.stateSeq = c.stateSeq[0], c.stateSeq[1:]
+	}
 	st := crealityws.Status{
-		State:          p("state", 0),
+		State:          p("state", stateNow),
 		DeviceState:    p("deviceState", c.deviceState),
 		FeedState:      p("feedState", c.feedState),
 		UpgradeStatus:  p("upgradeStatus", c.upgradeStatus),

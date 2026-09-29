@@ -118,6 +118,9 @@ func (p *Policy) Execute(ctx context.Context, deps Deps, printer domain.Printer,
 	// step before sending" snapshot (P5): nothing slow happens between this
 	// read and the send call below.
 	snap := printerstate.Take(ctx, deps.stateDeps(), printer)
+	// A pause this server sent that has now settled gets its resume record before
+	// anything derives from it (final review M1).
+	finalizePause(ctx, deps, locks.pl, snap)
 	derived := deriveFor(locks.pl, snap, nil)
 
 	if !skipGate(name) {
@@ -143,6 +146,11 @@ func (p *Policy) Execute(ctx context.Context, deps Deps, printer domain.Printer,
 		extra := ""
 		effects, commands := spec.Effects, spec.Commands
 		var mapping []MappedFilament
+		if name == ActionCancelPrint && inStartWindow(snap, derived) {
+			// The confirm will send the 9999 stop, not Moonraker's cancel: the proposal
+			// must describe that, not END_PRINT (final review M4).
+			effects, commands = startWindowStopEffects, startWindowStopCommands
+		}
 		if bind != nil {
 			extra = bind.extra
 			mapping = bind.mapping
@@ -264,6 +272,9 @@ func (p *Policy) executeWithToken(ctx context.Context, deps Deps, printer domain
 	// Fresh snapshot, the last thing done before sending (P5) - never the
 	// snapshot the proposal was built from.
 	snap := printerstate.Take(ctx, deps.stateDeps(), printer)
+	// A pause this server sent that has now settled gets its resume record before
+	// anything derives from it (final review M1).
+	finalizePause(ctx, deps, locks.pl, snap)
 	derived := deriveFor(locks.pl, snap, nil)
 	job := printerstate.JobIdentityFrom(snap)
 
@@ -327,6 +338,9 @@ func checkGate(spec actionSpec, derived printerstate.Derived) *Error {
 	// Cancel during the print-start self-test is refused until the 9999 stop is
 	// verified (plan 8a.1). It is a gate rule, not only a parameter check, so the
 	// actions list and Execute give the same answer with the same text.
+	if spec.Name == ActionResumePrint && derived.State == printerstate.StateResuming {
+		return &Error{Code: CodeUnavailable, Message: "a resume is already in progress: the printer is running its RESUME routine (reheat, purge, wipe); follow it with get_printer_status"}
+	}
 	if spec.Name == ActionCancelPrint && derived.StartWindow && !stopDuringStartVerified {
 		return &Error{Code: CodeUnavailable, Message: startWindowCancelRefusal}
 	}
@@ -357,6 +371,10 @@ func (p *Policy) send(ctx context.Context, deps Deps, printer domain.Printer, id
 			return p.sendStartCFS(ctx, deps, printer, identity, spec, params, snap, derived, locks, bind)
 		}
 		return p.sendStartPrint(ctx, deps, printer, identity, spec, params, snap, derived, locks)
+	case ActionPausePrint:
+		return p.sendPause(ctx, deps, printer, spec, snap, derived, locks)
+	case ActionResumePrint:
+		return p.sendResume(ctx, deps, printer, spec, snap, derived, locks)
 	case ActionCancelPrint:
 		if inStartWindow(snap, derived) {
 			return p.sendStopInWindow(ctx, deps, printer, spec, snap, derived, locks)

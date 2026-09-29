@@ -394,7 +394,7 @@ func recentActivity(snap Snapshot) []string {
 		return nil
 	}
 	out := make([]string, 0, len(snap.GCodeStoreTail))
-	for _, e := range snap.GCodeStoreTail {
+	for _, e := range CollapseTemperatureReports(snap.GCodeStoreTail, false) {
 		out = append(out, e.Message)
 	}
 	return out

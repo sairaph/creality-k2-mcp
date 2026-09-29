@@ -100,7 +100,6 @@ func TestSetFilament_ParameterRefusals(t *testing.T) {
 		{"no pressure advance", editParams("T1A", "99006", "#ff0000"), CodeInvalidInput, "pressure advance"},
 		{"pressure advance above 1", editParams("T1A", "99010", "#ff0000"), CodeInvalidInput, "outside 0-1"},
 		{"above the nozzle ceiling", editParams("T1A", "99007", "#ff0000"), CodeInvalidInput, "ceiling"},
-		{"side spool unverified", editParams("side_spool", "99003", "#ffffff"), CodeUnavailable, "not yet verified"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -288,10 +287,10 @@ func TestSetFilament_UnconfirmedReportsEachChannel(t *testing.T) {
 	})
 }
 
-func TestSetFilament_SideSpoolWhenVerified(t *testing.T) {
-	old := sideSpoolEditVerified
-	sideSpoolEditVerified = true
-	t.Cleanup(func() { sideSpoolEditVerified = old })
+func TestSetFilament_SideSpoolEditWorksWhenVerified(t *testing.T) {
+	if !sideSpoolEditVerified {
+		t.Fatal("the side spool edit was verified live (2026-09-29) and must be on")
+	}
 
 	f, p, printer := filamentSetup(t, "fil-side")
 	res, err := exec(p, f, printer, ActionSetFilamentDefinition, editParams("side_spool", "99001", "#112233"), "")
@@ -317,5 +316,19 @@ func TestParseFilamentTarget(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("parseFilamentTarget(%q) = %+v %v, want %+v", in, got, err, want)
 		}
+	}
+}
+
+// With the switch off (a release that has not verified it) the side spool is
+// refused with a clear reason and nothing is sent.
+func TestSetFilament_SideSpoolRefusedWhenTheSwitchIsOff(t *testing.T) {
+	old := sideSpoolEditVerified
+	sideSpoolEditVerified = false
+	t.Cleanup(func() { sideSpoolEditVerified = old })
+	f, p, printer := filamentSetup(t, "fil-side-off")
+	_, err := exec(p, f, printer, ActionSetFilamentDefinition, editParams("side_spool", "99003", "#ffffff"), "")
+	wantErr(t, err, CodeUnavailable, "not yet verified")
+	if f.cfs.modifyCalls != 0 {
+		t.Fatal("a write was sent")
 	}
 }

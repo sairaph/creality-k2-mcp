@@ -683,3 +683,35 @@ func TestMaterialEdit_ValidateBoxAndCatalogFields(t *testing.T) {
 		t.Errorf("valid side spool edit: %v", err)
 	}
 }
+
+// Side spool edits confirm without same_material (supervised session
+// 2026-09-29): rfid, colour and editStatus 1 are enough, and the first push
+// (editStatus 0) still does not confirm.
+func TestMaterialEditConfirms_SideSpoolNeedsNoSameMaterial(t *testing.T) {
+	e := MaterialEdit{BoxID: 0, SlotID: 0, BoxType: 1,
+		Entry: CatalogEntry{ID: "99003", Brand: "Acme", Name: "Acme Side PLA", Type: "PLA", MinTemp: 190, MaxTemp: 240, PressureAdvance: ptrF(0.04)}, Color: "#112233"}
+	one, zero := 1, 0
+	frame := func(edit *int, rfid string, groups bool) BoxsInfo {
+		b := BoxsInfo{MaterialBoxs: []MaterialBox{{ID: 0, Type: 1, Materials: []SlotMaterial{{ID: 0, RFID: rfid, Color: "#0112233", EditStatus: edit, State: &one}}}}}
+		if groups {
+			b.SameMaterialOK = true
+		}
+		return b
+	}
+	if !e.Confirms(frame(&one, "99003", false)) {
+		t.Fatal("rfid, colour and editStatus 1 must confirm a side spool edit without same_material")
+	}
+	if e.Confirms(frame(&zero, "99003", false)) {
+		t.Fatal("the first push (editStatus 0) must not confirm")
+	}
+	if e.Confirms(frame(&one, "99001", false)) {
+		t.Fatal("a different rfid must not confirm")
+	}
+	// A CFS slot still needs the regrouping.
+	cfs := captureEdit()
+	b := decodeCaptureBoxs(t, replayFrames(t)[2])
+	b.SameMaterialOK = false
+	if cfs.Confirms(b) {
+		t.Fatal("a CFS slot must still require same_material")
+	}
+}

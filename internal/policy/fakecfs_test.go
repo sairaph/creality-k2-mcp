@@ -21,6 +21,7 @@ type fakeCFS struct {
 	deviceState, feedState, materialStatus, errcode, errkey int
 	repoPlrStatus, upgradeStatus                            int
 	withSelfTest, enableSelfTest                            int
+	state                                                   int // 9999 state: 0 idle, 1 printing or self-test, 7 stopping, 8 resuming, 4 aborted
 	omit                                                    map[string]bool
 	ws9999Unreachable                                       bool
 
@@ -58,8 +59,10 @@ type fakeCFS struct {
 	stopCalls       int
 	forcedMapping   map[string]string // overrides the map the printer writes for a colorMatch
 	startNotSent    bool
-	startAmbiguous  bool // the start frame write errors after verifyMap passed
-	boxsInfoHang    bool // BoxsInfo blocks until its context ends
+	startAmbiguous  bool  // the start frame write errors after verifyMap passed
+	boxsInfoHang    bool  // BoxsInfo blocks until its context ends
+	stopNoState     bool  // a stop frame does not show state 7 or 4
+	stateSeq        []int // ReadStatus reports these states one per call before the plain state
 	boxsInfoCalls   int
 	wsEvents        []string
 }
@@ -388,6 +391,7 @@ func (f *fakePrinter) StartCFSPrint(ctx context.Context, path string, items []cr
 	c.startFrames++
 	c.wsEvents = append(c.wsEvents, "multiColorPrint")
 	c.withSelfTest = 40 // the self-test begins; print_stats stays standby
+	c.state = 1
 	return true, nil
 }
 
@@ -410,6 +414,9 @@ func (f *fakePrinter) Stop(ctx context.Context) (bool, error) {
 	c.stopCalls++
 	c.wsEvents = append(c.wsEvents, "stop")
 	c.withSelfTest = 100
+	if !c.stopNoState {
+		c.state = 7
+	}
 	c.resetMap()
 	return true, nil
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sairaph/creality_k2_mcp/internal/crealityws"
 	"github.com/sairaph/creality_k2_mcp/internal/domain"
 	"github.com/sairaph/creality_k2_mcp/internal/moonraker"
 	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
@@ -347,7 +348,7 @@ func TestStartWindow_RecordCoversTheWindowBeforeAnySignal(t *testing.T) {
 	f, p, printer, _ := startedFixture(t, "window-record")
 	// The signals have not appeared yet: self-test progress 100, identity map.
 	f.setSelfTest(100)
-	f.cfs9999(func(c *fakeCFS) { c.resetMap() })
+	f.cfs9999(func(c *fakeCFS) { c.resetMap(); c.state = 0 })
 
 	snap := printerstate.Take(context.Background(), f.deps().stateDeps(), printer)
 	if d := printerstate.DeriveActivityState(snap, nil); d.State != printerstate.StateIdle {
@@ -365,8 +366,10 @@ func TestStartWindow_RecordCoversTheWindowBeforeAnySignal(t *testing.T) {
 	}
 	// The actions list and Execute agree: cancel is blocked in the window with the
 	// same reason Execute gives (safety review m3, surface review M2).
-	if g := gateStatus(t, gates, ActionCancelPrint); g.Status != "blocked" || g.Reason != startWindowCancelRefusal {
-		t.Errorf("cancel_print in the start window: %q %q, want blocked with the printer-screen reason", g.Status, g.Reason)
+	// The 9999 stop is verified, so cancel is offered in the window; the gate and
+	// Execute agree in both settings of the switch (see the tests below).
+	if g := gateStatus(t, gates, ActionCancelPrint); g.Status != "needs_confirmation" {
+		t.Errorf("cancel_print in the start window: %q %q, want needs_confirmation", g.Status, g.Reason)
 	}
 
 	// Execute applies the same record (it derives with a nil pending).
@@ -393,7 +396,7 @@ func TestStartWindow_RecordCoversTheWindowBeforeAnySignal(t *testing.T) {
 func TestStartWindow_UploadAndDeleteRefuseTheInFlightFile(t *testing.T) {
 	f, p, printer, _ := startedFixture(t, "window-files")
 	f.setSelfTest(100)
-	f.cfs9999(func(c *fakeCFS) { c.resetMap() })
+	f.cfs9999(func(c *fakeCFS) { c.resetMap(); c.state = 0 })
 
 	_, err := exec(p, f, printer, ActionUploadGCodeFile, Params{Filename: "three.gcode", LocalPath: "x"}, "")
 	wantErr(t, err, CodeConflict, "print start of this file is in flight")
@@ -418,7 +421,12 @@ func TestStartWindow_SignalOnlyRefusesUploadOverAndDelete(t *testing.T) {
 	wantErr(t, err, CodeConflict, "self-test")
 }
 
-func TestStartWindow_CancelRefusedUntilStopIsVerified(t *testing.T) {
+// While the 9999 stop is unverified (the switch off), cancel in the window is
+// refused everywhere with the printer-screen reason.
+func TestStartWindow_CancelRefusedWhileTheStopIsUnverified(t *testing.T) {
+	old := stopDuringStartVerified
+	stopDuringStartVerified = false
+	t.Cleanup(func() { stopDuringStartVerified = old })
 	f, p, printer, _ := startedFixture(t, "window-cancel")
 	_, err := exec(p, f, printer, ActionCancelPrint, Params{}, "")
 	wantErr(t, err, CodeUnavailable, "stop it on the printer screen")
@@ -427,16 +435,19 @@ func TestStartWindow_CancelRefusedUntilStopIsVerified(t *testing.T) {
 	}
 }
 
-func TestStartWindow_CancelSendsTheNineNineNineNineStopWhenVerified(t *testing.T) {
-	old := stopDuringStartVerified
-	stopDuringStartVerified = true
-	t.Cleanup(func() { stopDuringStartVerified = old })
-
+// Verified live 2026-09-29: cancel in the window sends the 9999 stop frame (never
+// Moonraker's cancel), the reply returns once 9999 state reads 7 (or 4) with
+// Effect stopping, and it does not wait for the wind-down.
+func TestStartWindow_CancelSendsTheNineNineNineNineStop(t *testing.T) {
+	if !stopDuringStartVerified {
+		t.Fatal("the stop must be verified (supervised session 2026-09-29)")
+	}
 	f, p, printer, _ := startedFixture(t, "window-stop")
 	prop, err := exec(p, f, printer, ActionCancelPrint, Params{}, "")
 	if err != nil {
 		t.Fatalf("cancel proposal in the window: %v", err)
 	}
+	begin := time.Now()
 	res, err := exec(p, f, printer, ActionCancelPrint, Params{}, prop.Token)
 	if err != nil {
 		t.Fatalf("cancel: %v", err)
@@ -447,11 +458,148 @@ func TestStartWindow_CancelSendsTheNineNineNineNineStopWhenVerified(t *testing.T
 	if _, _, _, cancel := f.counts(); cancel != 0 {
 		t.Fatal("a Moonraker cancel was also sent")
 	}
-	if !res.Accepted || res.Effect != "confirmed" {
-		t.Fatalf("accepted %v effect %s, want confirmed once the window is gone", res.Accepted, res.Effect)
+	if !res.Accepted || res.Effect != "stopping" {
+		t.Fatalf("accepted %v effect %s, want stopping", res.Accepted, res.Effect)
+	}
+	if time.Since(begin) > 5*time.Second {
+		t.Fatalf("the reply took %s: it must not wait for the wind-down", time.Since(begin))
+	}
+	txt := strings.Join(res.Effects, " ")
+	for _, want := range []string{"finishes its current self-test step (about 20 s)", "turns the heaters off", "returns to idle within about a minute", "follow with get_printer_status"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("effects missing %q: %v", want, res.Effects)
+		}
 	}
 	if p.locks.get("window-stop").getStartRec() != nil {
 		t.Fatal("the start record survived a successful stop")
+	}
+}
+
+// If neither state 7 nor 4 is seen, the frame was still sent: Effect sent.
+func TestStartWindow_CancelWithoutASignOfStoppingIsSent(t *testing.T) {
+	oldW, oldI := stopWaitTimeout, stopPollInterval
+	stopWaitTimeout, stopPollInterval = 60*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { stopWaitTimeout, stopPollInterval = oldW, oldI })
+	f, p, printer, _ := startedFixture(t, "window-stop-nosign")
+	f.cfs9999(func(c *fakeCFS) { c.stopNoState = true })
+	prop, _ := exec(p, f, printer, ActionCancelPrint, Params{}, "")
+	res, err := exec(p, f, printer, ActionCancelPrint, Params{}, prop.Token)
+	if err != nil || !res.Accepted || res.Effect != "sent" {
+		t.Fatalf("effect %s accepted %v err %v, want sent", res.Effect, res.Accepted, err)
+	}
+	if !strings.Contains(strings.Join(res.Effects, " "), "returns to idle within about a minute") {
+		t.Fatalf("effects = %v", res.Effects)
+	}
+}
+
+// State 4 (aborted) persists at rest from an earlier stop, so a stale 4 alone is
+// not "stopping": the reply is sent and the start record is kept (final review
+// m1). State 4 counts once a state other than 4 was seen after the frame.
+func TestStartWindow_StaleStateFourAloneIsNotStopping(t *testing.T) {
+	oldW, oldI := stopWaitTimeout, stopPollInterval
+	stopWaitTimeout, stopPollInterval = 80*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { stopWaitTimeout, stopPollInterval = oldW, oldI })
+	f, p, printer, _ := startedFixture(t, "window-stop4-stale")
+	f.cfs9999(func(c *fakeCFS) { c.stopNoState = true; c.state = 4 })
+	prop, _ := exec(p, f, printer, ActionCancelPrint, Params{}, "")
+	res, err := exec(p, f, printer, ActionCancelPrint, Params{}, prop.Token)
+	if err != nil || res.Effect != "sent" || !res.Accepted {
+		t.Fatalf("effect %s accepted %v err %v, want sent", res.Effect, res.Accepted, err)
+	}
+	if p.locks.get("window-stop4-stale").getStartRec() == nil {
+		t.Fatal("the start record was cleared on a stale 4")
+	}
+}
+
+func TestStartWindow_StateFourAfterAnotherStateIsStopped(t *testing.T) {
+	f, p, printer, _ := startedFixture(t, "window-stop4")
+	prop, _ := exec(p, f, printer, ActionCancelPrint, Params{}, "")
+	// The confirming call's own snapshot reads the first value, then the stop wait
+	// reads 1 (another state) and then 4.
+	f.cfs9999(func(c *fakeCFS) { c.stopNoState = true; c.stateSeq = []int{1, 1, 4} })
+	res, err := exec(p, f, printer, ActionCancelPrint, Params{}, prop.Token)
+	if err != nil || res.Effect != "stopping" {
+		t.Fatalf("effect %s err %v, want stopping", res.Effect, err)
+	}
+	if p.locks.get("window-stop4").getStartRec() != nil {
+		t.Fatal("the record must end once the printer is stopping")
+	}
+}
+
+// The cancel proposal in the window describes the stop, not END_PRINT (final
+// review M4).
+func TestStartWindow_CancelProposalDescribesTheStop(t *testing.T) {
+	f, p, printer, _ := startedFixture(t, "window-prop")
+	prop, err := exec(p, f, printer, ActionCancelPrint, Params{}, "")
+	if err != nil || !prop.Proposed {
+		t.Fatalf("proposal: %v", err)
+	}
+	txt := strings.Join(prop.Effects, " ") + " " + strings.Join(prop.Commands, " ")
+	for _, want := range []string{"9999 stop", "about 20 s", "turns the heaters off", "within about a minute", "stop (port 9999)"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("proposal missing %q: %s", want, txt)
+		}
+	}
+	for _, bad := range []string{"END_PRINT", "PrintCancel", "EEPROM"} {
+		if strings.Contains(txt, bad) {
+			t.Errorf("proposal mentions %q, which the stop path does not do: %s", bad, txt)
+		}
+	}
+	// An ordinary cancel keeps its own description.
+	f2, p2, printer2 := cfsSetup(t, "prop-plain")
+	f2.setPrinting("m.gcode")
+	plain, _ := exec(p2, f2, printer2, ActionCancelPrint, Params{}, "")
+	if !strings.Contains(strings.Join(plain.Effects, " "), "END_PRINT") {
+		t.Errorf("a plain cancel proposal lost its END_PRINT description: %v", plain.Effects)
+	}
+}
+
+// A stopped or failed start (9999 state 3 or 4) ends the start record, but only
+// in a snapshot taken after the frame and its grace period: state 4 persists at
+// rest from an earlier stop and flips to 9 within about a second of the frame.
+func TestStartRecord_ClearedByStateThreeOrFourAfterTheFrameAndGrace(t *testing.T) {
+	now := time.Now()
+	for _, st := range []int{3, 4} {
+		pl := &printerLock{}
+		rec := &startInFlight{filename: "a", issuedAt: now}
+		pl.setStartRec(rec)
+		snap := printerstate.Snapshot{Taken: now.Add(10 * time.Second)}
+		snap.WS9999.State = crealityws.Int{Value: st, Present: true}
+
+		if pl.activeStartRec(snap) == nil {
+			t.Fatalf("state %d: cleared before the frame was sent (a stale value from an earlier stop)", st)
+		}
+		pl.markStartSent()
+		rec.sentAt = now // the frame went out at the start
+		snap.Taken = now.Add(startStateGrace / 2)
+		if pl.activeStartRec(snap) == nil {
+			t.Fatalf("state %d: cleared inside the grace period", st)
+		}
+		snap.Taken = now.Add(startStateGrace + time.Second)
+		if pl.activeStartRec(snap) != nil || pl.getStartRec() != nil {
+			t.Fatalf("state %d: not cleared after the grace period", st)
+		}
+	}
+	// States 1, 9, 7 and 0 never clear it.
+	for _, st := range []int{0, 1, 7, 9} {
+		pl := &printerLock{}
+		rec := &startInFlight{filename: "a", issuedAt: now, sentAt: now}
+		pl.setStartRec(rec)
+		snap := printerstate.Snapshot{Taken: now.Add(startStateGrace + time.Minute)}
+		snap.WS9999.State = crealityws.Int{Value: st, Present: true}
+		if pl.activeStartRec(snap) == nil {
+			t.Fatalf("state %d cleared the record", st)
+		}
+	}
+}
+
+func TestStartCFS_StampsTheRecordWithTheTimeTheFrameWasSent(t *testing.T) {
+	f, p, printer, _ := startedFixture(t, "stamp")
+	_ = f
+	_ = printer
+	rec := p.locks.get("stamp").getStartRec()
+	if rec == nil || rec.sentAt.IsZero() {
+		t.Fatalf("record = %+v, want sentAt set", rec)
 	}
 }
 
@@ -474,7 +622,7 @@ func TestStartWindow_RecordEndsWhenPrintStatsMovesOn(t *testing.T) {
 func TestStartWindow_RecordExpiresAfterFifteenMinutes(t *testing.T) {
 	f, p, printer, _ := startedFixture(t, "window-expire")
 	f.setSelfTest(100)
-	f.cfs9999(func(c *fakeCFS) { c.resetMap() })
+	f.cfs9999(func(c *fakeCFS) { c.resetMap(); c.state = 0 })
 	pl := p.locks.get("window-expire")
 	rec := pl.getStartRec()
 	rec.issuedAt = rec.issuedAt.Add(-16 * time.Minute)
