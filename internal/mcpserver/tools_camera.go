@@ -171,7 +171,7 @@ func getCameraSnapshotHandler(s *Server) func(context.Context, *mcp.CallToolRequ
 		}
 
 		snap := <-stateCh
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		if derived.State == printerstate.StateOffline {

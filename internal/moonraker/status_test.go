@@ -630,3 +630,100 @@ func TestDecodeFilamentRackMissingFieldsAreNil(t *testing.T) {
 		t.Fatalf("FilamentRack fields = %+v, want all nil when every key is absent", v)
 	}
 }
+
+// TestDecodeBox_ConnectedCfsCapture decodes the real Moonraker box object
+// captured with a CFS connected (2026-09-29): pointer fields carry the
+// reported values, same_material decodes from Moonraker's own form and the
+// T1 unit exposes its per-slot material codes and colours.
+func TestDecodeBox_ConnectedCfsCapture(t *testing.T) {
+	var envelope struct {
+		Result struct {
+			Status map[string]json.RawMessage `json:"status"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(readFixture(t, "moonraker_box_filament_rack_20260929.json"), &envelope); err != nil {
+		t.Fatalf("decode capture: %v", err)
+	}
+	v, err := DecodeBox(requireKey(t, envelope.Result.Status, "box"))
+	if err != nil {
+		t.Fatalf("DecodeBox: %v", err)
+	}
+	if v.State == nil || *v.State != "connect" {
+		t.Fatalf("State = %v, want connect", v.State)
+	}
+	if v.Enable == nil || *v.Enable != 1 || v.FilamentUseup == nil || *v.FilamentUseup != 0 ||
+		v.AutoRefill == nil || *v.AutoRefill != 1 || v.Filament == nil || *v.Filament != 1 {
+		t.Fatalf("pointer fields = enable %v useup %v auto_refill %v filament %v", v.Enable, v.FilamentUseup, v.AutoRefill, v.Filament)
+	}
+	if !v.SameMaterialOK || len(v.SameMaterial) != 3 {
+		t.Fatalf("same_material ok=%v groups=%d, want ok with 3 groups", v.SameMaterialOK, len(v.SameMaterial))
+	}
+	if g := v.SameMaterial[0]; g.Code != "000003" || g.Color != "0000000" || g.Name != "PETG" ||
+		len(g.Slots) != 2 || g.Slots[0] != "T1A" || g.Slots[1] != "T1B" {
+		t.Fatalf("group 0 = %+v", g)
+	}
+	if v.Map["T1B"] != "T1B" || len(v.Map) != 16 {
+		t.Fatalf("map = %v, want the 16-entry identity map", v.Map)
+	}
+	t1, ok := v.Units["T1"]
+	if !ok || t1.State != "connect" {
+		t.Fatalf("T1 = %+v ok=%v", t1, ok)
+	}
+	if len(t1.MaterialType) != 4 || t1.MaterialType[0] != "000003" || t1.ColorValue[2] != "0f4e076" {
+		t.Fatalf("T1 arrays = %v / %v", t1.MaterialType, t1.ColorValue)
+	}
+	if u := v.Units["T2"]; u.State != "None" {
+		t.Fatalf("T2 state = %q, want None", u.State)
+	}
+	if !v.AnyUnitConnected() {
+		t.Fatal("AnyUnitConnected = false with T1 connected")
+	}
+}
+
+// A wrong type on state, enable or filament_useup leaves that pointer nil,
+// never zero, and never fails the whole decode (plan 2.1); a malformed
+// display array does not fail the decode either.
+func TestDecodeBox_WrongTypesFailClosedWithoutFailingTheDecode(t *testing.T) {
+	v, err := DecodeBox(json.RawMessage(`{
+		"state": 5, "enable": "1", "filament_useup": "0", "auto_refill": 1.5, "filament": true,
+		"map": ["not","a","map"], "same_material": [["000003","0000000",["T1A"]]],
+		"T1": {"state": "connect", "material_type": "oops", "color_value": ["0000000", 12, null, {"x":1}]},
+		"T2": "not an object",
+		"T9": {"state": "connect"}}`))
+	if err != nil {
+		t.Fatalf("DecodeBox failed on wrong types: %v", err)
+	}
+	if v.State != nil || v.Enable != nil || v.FilamentUseup != nil || v.AutoRefill != nil || v.Filament != nil {
+		t.Fatalf("wrong-typed fields must be nil, got state %v enable %v useup %v auto %v filament %v",
+			v.State, v.Enable, v.FilamentUseup, v.AutoRefill, v.Filament)
+	}
+	if v.Map != nil || v.SameMaterial != nil || v.SameMaterialOK {
+		t.Fatalf("map/same_material = %v/%v/%v, want nil/nil/false", v.Map, v.SameMaterial, v.SameMaterialOK)
+	}
+	u, ok := v.Units["T1"]
+	if !ok || u.MaterialType != nil {
+		t.Fatalf("T1 = %+v ok=%v, want the unit with a nil MaterialType", u, ok)
+	}
+	if len(u.ColorValue) != 4 || u.ColorValue[0] != "0000000" || u.ColorValue[1] != "12" || u.ColorValue[2] != "" || u.ColorValue[3] != "" {
+		t.Fatalf("mixed colour array = %q, want numbers coerced and junk empty", u.ColorValue)
+	}
+	if _, ok := v.Units["T2"]; ok {
+		t.Fatal("a non-object unit must be skipped")
+	}
+	if _, ok := v.Units["T9"]; ok {
+		t.Fatal("only T1..T4 are decoded")
+	}
+	if !v.Connected() {
+		t.Fatal("nil state must still fail closed to connected")
+	}
+}
+
+func TestBoxAnyUnitConnected(t *testing.T) {
+	if (Box{}).AnyUnitConnected() {
+		t.Fatal("no units must not count as connected")
+	}
+	b := Box{Units: map[string]BoxUnit{"T1": {State: "None"}, "T2": {State: "connect"}}}
+	if !b.AnyUnitConnected() {
+		t.Fatal("T2 connect must count")
+	}
+}

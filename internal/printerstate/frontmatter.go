@@ -84,6 +84,23 @@ type CameraBlock struct {
 	SecondsSinceMedia *float64 `yaml:"seconds_since_media,omitempty"`
 }
 
+// CFS states reported in CFSBlock.State.
+const (
+	CFSStateUnknown = "unknown"
+	CFSStateError   = "error"
+	CFSStateBusy    = "busy"
+	CFSStateIdle    = "idle"
+	CFSStateInPrint = "in_print"
+)
+
+// CFSBlock is the frontmatter's cfs block, present only while a CFS is
+// connected (plan-v0.2.0.md sections 2.5 and 8a.6): State is one of the
+// CFSState constants and Reasons names every field behind a non-idle answer.
+type CFSBlock struct {
+	State   string   `yaml:"state" json:"state"`
+	Reasons []string `yaml:"reasons,omitempty" json:"reasons,omitempty"`
+}
+
 // StateBlock is the typed YAML frontmatter every tool result embeds
 // (dev_docs/safety-architecture.md section 5, references/analysis/11-state-model.md
 // section 6). Field order here is the order it renders in, which is
@@ -114,6 +131,12 @@ type StateBlock struct {
 	GatingClass   string   `yaml:"gating_class"`
 	Reasons       []string `yaml:"reasons,omitempty"`
 	CFSConnected  bool     `yaml:"cfs_connected"`
+	// CFS is set only while a CFS is connected (cfs_connected stays as is).
+	CFS *CFSBlock `yaml:"cfs,omitempty"`
+	// StartWindow is true while the printer is in the self-test of a print start
+	// (state preparing, bucket PP, with print_stats not yet printing): cancel from
+	// this server is refused in it, unlike the ordinary START_PRINT prepare phase.
+	StartWindow bool `yaml:"start_window,omitempty"`
 
 	// Job identity (nil-able as a group when no job is known).
 	Job *JobIdentity `yaml:"job,omitempty"`
@@ -198,6 +221,8 @@ func BuildStateBlock(snap Snapshot, derived Derived, pending *PendingAction) Sta
 		GatingClass:      string(derived.Class),
 		Reasons:          nonEmptyReasons(derived.Reasons),
 		CFSConnected:     derived.CFSConnected,
+		CFS:              buildCFSBlock(derived),
+		StartWindow:      derived.StartWindow,
 		Job:              JobIdentityFrom(snap),
 		Ws9999Reachable:  snap.WS9999Reachable,
 		RecentActivity:   recentActivity(snap),
@@ -241,6 +266,33 @@ func BuildStateBlock(snap Snapshot, derived Derived, pending *PendingAction) Sta
 	block.Pending = buildPendingBlock(pending, snap.Taken)
 
 	return block
+}
+
+// buildCFSBlock renders the cfs block, nil when no CFS is connected. The state is
+// derived bucket-first (plan 8a.6): CFSQuiescent requires deviceState 0, which
+// is presumably false during every print, so in a print bucket (P, PP, Z) the
+// answer is in_print unless the CFS is not Known (unknown) or has an Error
+// (error); tool changes and physical slot presence are undetectable. In bucket
+// I it is unknown, error, busy (not quiescent) or idle. For every other
+// bucket (U, E, B, T) the plan is silent: unknown and error still win, and
+// otherwise the answer is busy, since such a printer is neither idle nor in a
+// print and the fail-closed reading is "do not treat the CFS as at rest".
+func buildCFSBlock(d Derived) *CFSBlock {
+	if !d.CFSConnected {
+		return nil
+	}
+	state := CFSStateBusy
+	switch {
+	case !d.CFSKnown:
+		state = CFSStateUnknown
+	case d.CFSError:
+		state = CFSStateError
+	case d.Bucket == BucketP || d.Bucket == BucketPP || d.Bucket == BucketZ:
+		state = CFSStateInPrint
+	case d.Bucket == BucketI && d.CFSQuiescent:
+		state = CFSStateIdle
+	}
+	return &CFSBlock{State: state, Reasons: nonEmptyReasons(d.CFSReasons)}
 }
 
 // verifiedHostname reports the hostname snap's own printer/info read

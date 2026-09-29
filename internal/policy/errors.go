@@ -20,7 +20,7 @@ const (
 	// a configured band (D1).
 	CodeInvalidInput Code = "invalid_input"
 	// CodeUnavailable: the action is not allowed in the printer's current
-	// bucket/gating class, or CFS is connected and blocks it (D5), or a
+	// bucket/gating class, or the action's CFS rule refuses it while a CFS is connected (cfs.go, plan-v0.2.0.md 3.1), or a
 	// live value this action's limit depends on (e.g. product_param) could
 	// not be read.
 	CodeUnavailable Code = "unavailable"

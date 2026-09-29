@@ -106,7 +106,7 @@ func listPrintersHandler(s *Server) func(context.Context, *mcp.CallToolRequest, 
 				defer cancel()
 				deps := s.deps.PrinterClients(p)
 				snap := printerstate.Take(pctx, deps, p)
-				derived := printerstate.DeriveActivityState(snap, nil)
+				derived := s.derive(snap)
 				block := printerstate.BuildStateBlock(snap, derived, nil)
 				summaries[i] = printerSummary{
 					ID:            p.ID,

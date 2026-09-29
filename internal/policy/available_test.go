@@ -55,6 +55,10 @@ func TestAvailableFor_PausedState(t *testing.T) {
 	}
 }
 
+// D5 converted to the section 3.1 table (dev_docs/plan-v0.2.0.md): with a healthy
+// CFS mid-print, the nozzle and flow are refused by their rules (V5), pause and
+// cancel stay reachable, and the fan and speed rules allow a Known, error free
+// CFS. The per-row and per-signal cases live in cfs_policy_test.go.
 func TestAvailableFor_CFSConnectedBlocksControlKeepsStopping(t *testing.T) {
 	f := newFakePrinter()
 	f.setPrinting("model.gcode")
@@ -64,7 +68,13 @@ func TestAvailableFor_CFSConnectedBlocksControlKeepsStopping(t *testing.T) {
 	gates := AvailableFor(derived, testSettings())
 
 	if g := gateStatus(t, gates, ActionSetNozzleTemperature); g.Status != "blocked" {
-		t.Errorf("set_nozzle_temperature with CFS connected: status = %q, want blocked", g.Status)
+		t.Errorf("set_nozzle_temperature with CFS connected mid-print: status = %q, want blocked", g.Status)
+	}
+	if g := gateStatus(t, gates, ActionSetFlowFactor); g.Status != "blocked" {
+		t.Errorf("set_flow_factor with CFS connected: status = %q, want blocked", g.Status)
+	}
+	if g := gateStatus(t, gates, ActionSetFanSpeed); g.Status != "available" {
+		t.Errorf("set_fan_speed with a healthy CFS mid-print: status = %q, want available", g.Status)
 	}
 	if g := gateStatus(t, gates, ActionPausePrint); g.Status != "available" {
 		t.Errorf("pause_print with CFS connected: status = %q, want available", g.Status)

@@ -338,7 +338,7 @@ func listGCodeFilesHandler(s *Server) func(context.Context, *mcp.CallToolRequest
 
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		fc, ok := deps.Moonraker.(filesClient)
@@ -451,7 +451,7 @@ func getGCodeFileHandler(s *Server) func(context.Context, *mcp.CallToolRequest, 
 
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		fc, ok := deps.Moonraker.(filesClient)
@@ -550,7 +550,7 @@ func inspectLocalGCodeHandler(s *Server) func(context.Context, *mcp.CallToolRequ
 
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		result, thumbs, err := gcodeinfo.InspectLocalGCode(absPath, gcodeinfo.ReadLimits{})
@@ -620,7 +620,7 @@ func inspectLocal3MFHandler(s *Server) func(context.Context, *mcp.CallToolReques
 
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		result, thumbs, err := gcodeinfo.InspectLocal3MF(absPath, gcodeinfo.ThreeMFOptions{FullSettings: in.FullSettings})

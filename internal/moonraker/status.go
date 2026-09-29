@@ -497,21 +497,170 @@ func DecodeFilamentRack(raw json.RawMessage) (FilamentRack, error) {
 	return v, err
 }
 
-// Box is Creality's CFS (Creality Filament System) controller object.
-// v0.1.0 only needs its bus-connection flag (Connected); the per-slot
-// T1..T4 shapes are UNCONFIRMED while disconnected (03-k2-cfs-objects.md)
-// and are deferred to the v0.2.0 CFS work rather than modelled here. They
-// are simply ignored as unknown fields by encoding/json, so decoding a real
-// capture with a connected CFS will not fail, it will just not expose
-// per-slot detail yet.
+// Box is Creality's CFS (Creality Filament System) controller object
+// (dev_docs/plan-v0.2.0.md section 2.1; captured in
+// dev_docs/captures/moonraker_box_filament_rack_20260929.json).
+//
+// Enable, FilamentUseup, AutoRefill and Filament are pointers under the
+// presence rule at the top of this file: filament_useup 0 means "no runout"
+// and enable 1 is the value at rest, so a field the printer did not report
+// (or reported with an unexpected type) must never read as that zero. A wrong
+// type on state, enable or filament_useup leaves the pointer nil (fail
+// closed), it never decodes to zero, and no wrong-typed field fails the whole
+// decode.
+//
+// The json tags exist only so a Box marshals in the same wire shape the
+// custom UnmarshalJSON reads for the simple fields (tests build Moonraker
+// fixtures by marshalling a Box); the composite decoded fields are not
+// round-tripped.
 type Box struct {
-	Filament      int               `json:"filament"`
-	State         *string           `json:"state"`
-	AutoRefill    int               `json:"auto_refill"`
-	Enable        int               `json:"enable"`
-	FilamentUseup int               `json:"filament_useup"`
-	SameMaterial  []json.RawMessage `json:"same_material"`
-	Map           map[string]string `json:"map"`
+	Filament      *int    `json:"filament,omitempty"`
+	State         *string `json:"state,omitempty"`
+	AutoRefill    *int    `json:"auto_refill,omitempty"`
+	Enable        *int    `json:"enable,omitempty"`
+	FilamentUseup *int    `json:"filament_useup,omitempty"`
+	// SameMaterial is the printer's regrouping of interchangeable slots in
+	// Moonraker's form, [code6, color7, ["T1A",...], name]. SameMaterialOK
+	// is false when the key was absent or any group failed to decode (then
+	// SameMaterial is nil).
+	SameMaterial   []BoxSameGroup    `json:"-"`
+	SameMaterialOK bool              `json:"-"`
+	Map            map[string]string `json:"map,omitempty"`
+	// Units holds the per-unit display data for keys T1..T4 only.
+	Units map[string]BoxUnit `json:"-"`
+}
+
+// BoxSameGroup is one same_material group: Code is the 6-char material code
+// ("0" + the 5-char catalog id), Color the 7-char colour without "#", Slots
+// the member slot names ("T1A"), Name the material type.
+type BoxSameGroup struct {
+	Code, Color string
+	Slots       []string
+	Name        string
+}
+
+// BoxUnit is the display data of one CFS unit (T1..T4): State is the unit's
+// own state string ("connect", "None"...) and MaterialType/ColorValue are the
+// per-slot 6-char material code and 7-char colour, in slot order A..D. The
+// arrays may mix strings and numbers on the wire; every element is coerced to
+// a string, and a malformed array decodes to nil rather than failing the box.
+type BoxUnit struct {
+	State                    string
+	MaterialType, ColorValue []string
+}
+
+// boxUnitKeys are the unit keys this package decodes.
+var boxUnitKeys = []string{"T1", "T2", "T3", "T4"}
+
+// UnmarshalJSON decodes a box object field by field so that one wrongly
+// typed field costs only that field (see the Box doc comment).
+func (b *Box) UnmarshalJSON(data []byte) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	*b = Box{}
+	b.Filament = boxInt(m["filament"])
+	b.AutoRefill = boxInt(m["auto_refill"])
+	b.Enable = boxInt(m["enable"])
+	b.FilamentUseup = boxInt(m["filament_useup"])
+	if raw, ok := m["state"]; ok {
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			b.State = &s
+		}
+	}
+	if raw, ok := m["map"]; ok {
+		var mp map[string]string
+		if json.Unmarshal(raw, &mp) == nil {
+			b.Map = mp
+		}
+	}
+	if raw, ok := m["same_material"]; ok {
+		b.SameMaterial, b.SameMaterialOK = decodeBoxSameMaterial(raw)
+	}
+	for _, key := range boxUnitKeys {
+		raw, ok := m[key]
+		if !ok {
+			continue
+		}
+		var um map[string]json.RawMessage
+		if json.Unmarshal(raw, &um) != nil || um == nil {
+			continue
+		}
+		var u BoxUnit
+		if sraw, ok := um["state"]; ok {
+			_ = json.Unmarshal(sraw, &u.State) // a wrong type leaves ""
+		}
+		u.MaterialType = boxStrings(um["material_type"])
+		u.ColorValue = boxStrings(um["color_value"])
+		if b.Units == nil {
+			b.Units = map[string]BoxUnit{}
+		}
+		b.Units[key] = u
+	}
+	return nil
+}
+
+// boxInt decodes a JSON number with an integral value; anything else
+// (absent, null, string, fraction) is nil.
+func boxInt(raw json.RawMessage) *int {
+	if len(raw) == 0 {
+		return nil
+	}
+	var f float64
+	if json.Unmarshal(raw, &f) != nil || f != float64(int(f)) {
+		return nil
+	}
+	v := int(f)
+	return &v
+}
+
+// boxStrings decodes a display array whose elements may be strings or
+// numbers into strings; a non-array is nil and a null or structured element
+// becomes "".
+func boxStrings(raw json.RawMessage) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		return nil
+	}
+	out := make([]string, len(items))
+	for i, it := range items {
+		var s string
+		if json.Unmarshal(it, &s) == nil {
+			out[i] = s
+			continue
+		}
+		var n json.Number
+		if json.Unmarshal(it, &n) == nil {
+			out[i] = n.String()
+		}
+	}
+	return out
+}
+
+func decodeBoxSameMaterial(raw json.RawMessage) ([]BoxSameGroup, bool) {
+	var groups []json.RawMessage
+	if json.Unmarshal(raw, &groups) != nil {
+		return nil, false
+	}
+	out := make([]BoxSameGroup, 0, len(groups))
+	for _, g := range groups {
+		var parts []json.RawMessage
+		if json.Unmarshal(g, &parts) != nil || len(parts) != 4 {
+			return nil, false
+		}
+		var grp BoxSameGroup
+		if json.Unmarshal(parts[0], &grp.Code) != nil || json.Unmarshal(parts[1], &grp.Color) != nil ||
+			json.Unmarshal(parts[2], &grp.Slots) != nil || json.Unmarshal(parts[3], &grp.Name) != nil {
+			return nil, false
+		}
+		out = append(out, grp)
+	}
+	return out, true
 }
 
 // Connected reports whether a CFS unit is on the bus. The only value ever
@@ -526,6 +675,18 @@ func (b Box) Connected() bool {
 		return true
 	}
 	return *b.State != "disconnect"
+}
+
+// AnyUnitConnected reports whether any per-unit state is "connect". A brief
+// bus drop can flip box.state to "disconnect" while a unit still reports
+// itself connected; the CFS rules must not lift on that (plan 2.2).
+func (b Box) AnyUnitConnected() bool {
+	for _, u := range b.Units {
+		if u.State == "connect" {
+			return true
+		}
+	}
+	return false
 }
 
 func DecodeBox(raw json.RawMessage) (Box, error) {

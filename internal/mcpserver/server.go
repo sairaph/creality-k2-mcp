@@ -83,6 +83,7 @@ func newServer(config Config, deps Deps, extra ...func(*Server)) *Server {
 	registerCameraTools(srv)
 	registerViewerTools(srv)
 	registerControlTools(srv)
+	registerFilamentTools(srv)
 	registerFilesTools(srv)
 	registerRecordingTools(srv)
 

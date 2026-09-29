@@ -57,6 +57,13 @@ func init() {
 		},
 	})
 	oneShotCommands.Register(command.Handler{
+		Name:        "filaments",
+		Description: "Show the CFS and side spool filament slots (read-only)",
+		Run: func(ctx context.Context, args []string) int {
+			return clicmd.RunFilaments(ctx, clicmd.NewDefaultDeps(), args)
+		},
+	})
+	oneShotCommands.Register(command.Handler{
 		Name:        "snapshot",
 		Description: "Save one still frame from a printer's onboard camera",
 		Run: func(ctx context.Context, args []string) int {

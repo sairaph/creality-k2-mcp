@@ -1,30 +1,32 @@
 package policy
 
 import (
+	"strings"
 	"time"
 
 	"github.com/sairaph/creality_k2_mcp/internal/domain"
 	"github.com/sairaph/creality_k2_mcp/internal/printerstate"
 )
 
-// ActionName names one of the twelve writes this package knows how to
+// ActionName names one of the writes this package knows how to
 // perform. There is no way to Execute an action outside this fixed set.
 type ActionName string
 
 const (
-	ActionStartPrint           ActionName = "start_print"
-	ActionPausePrint           ActionName = "pause_print"
-	ActionResumePrint          ActionName = "resume_print"
-	ActionCancelPrint          ActionName = "cancel_print"
-	ActionSetNozzleTemperature ActionName = "set_nozzle_temperature"
-	ActionSetBedTemperature    ActionName = "set_bed_temperature"
-	ActionSetFanSpeed          ActionName = "set_fan_speed"
-	ActionSetSpeedFactor       ActionName = "set_speed_factor"
-	ActionSetFlowFactor        ActionName = "set_flow_factor"
-	ActionSetLight             ActionName = "set_light"
-	ActionExcludeObject        ActionName = "exclude_object"
-	ActionUploadGCodeFile      ActionName = "upload_gcode_file"
-	ActionDeleteGCodeFile      ActionName = "delete_gcode_file"
+	ActionStartPrint            ActionName = "start_print"
+	ActionPausePrint            ActionName = "pause_print"
+	ActionResumePrint           ActionName = "resume_print"
+	ActionCancelPrint           ActionName = "cancel_print"
+	ActionSetNozzleTemperature  ActionName = "set_nozzle_temperature"
+	ActionSetBedTemperature     ActionName = "set_bed_temperature"
+	ActionSetFanSpeed           ActionName = "set_fan_speed"
+	ActionSetSpeedFactor        ActionName = "set_speed_factor"
+	ActionSetFlowFactor         ActionName = "set_flow_factor"
+	ActionSetLight              ActionName = "set_light"
+	ActionExcludeObject         ActionName = "exclude_object"
+	ActionUploadGCodeFile       ActionName = "upload_gcode_file"
+	ActionDeleteGCodeFile       ActionName = "delete_gcode_file"
+	ActionSetFilamentDefinition ActionName = "set_filament_definition"
 )
 
 // Actions lists every action name in a stable order, for iteration
@@ -43,6 +45,7 @@ var Actions = []ActionName{
 	ActionExcludeObject,
 	ActionUploadGCodeFile,
 	ActionDeleteGCodeFile,
+	ActionSetFilamentDefinition,
 }
 
 // Confirmation is the confirmation kind an action needs, per D3
@@ -95,6 +98,25 @@ type Params struct {
 	// ObjectName is the object to exclude (exclude_object), matched
 	// case-insensitively per dev_docs/safety-architecture.md 4.2.
 	ObjectName string
+
+	// Slot names the slot set_filament_definition edits (T1A..T4D or
+	// side_spool, case-insensitive). Material is a 5-character catalog id or an
+	// exact catalog name, and Color is #rrggbb or rrggbb (plan 3.3).
+	Slot     string
+	Material string
+	Color    string
+
+	// Source is start_print's filament source with a CFS connected: "cfs"
+	// (default when empty) or "spool" (plan 3.4). SlotMap is the canonical
+	// override form "T1A=T1C,T1B=T1D": slicer tool = physical slot.
+	// SelfTest requests the printer's pre-print self-test; it only counts when
+	// SelfTestExplicit is true, otherwise the printer's own enableSelfTest
+	// value is the default, else false (plan 8a.7). SelfTestExplicit exists
+	// because a plain bool cannot tell "not asked" from "asked for false".
+	Source           string
+	SlotMap          string
+	SelfTest         bool
+	SelfTestExplicit bool
 }
 
 // IdleHeatArmRequest is what Execute sent Deps.Watchdog.Arm for a
@@ -182,4 +204,67 @@ type Result struct {
 	// Changed lists which bound fields a rejected proposal_token call found
 	// different from the ones it was issued for (conflict only).
 	Changed []string
+
+	// Filament is set by set_filament_definition: the slot before and after and
+	// the printer's same_material regrouping (plan 3.2).
+	Filament *FilamentChange
+
+	// Mapping is set by a CFS start_print proposal and result: one entry per
+	// file filament with the slot it maps to (plan 3.2, 3.4).
+	Mapping []MappedFilament
+}
+
+// SlotDefinition is one slot's filament definition as the printer reports it
+// (9999 boxsInfo).
+type SlotDefinition struct {
+	RFID   string // 5-character catalog id
+	Vendor string
+	Type   string
+	Name   string
+	Color  string // #rrggbb
+	State  int
+}
+
+// FilamentChange reports a set_filament_definition edit (plan 3.2, 3.3).
+// MoonrakerMaterialType and MoonrakerColor are the read-back values from the
+// Moonraker box (or filament_rack) object, empty when they could not be read.
+type FilamentChange struct {
+	Slot                  string
+	Before, After         SlotDefinition
+	SameMaterialBefore    []string
+	SameMaterialAfter     []string
+	MoonrakerMaterialType string
+	MoonrakerColor        string
+}
+
+// MappedFilament is one row of a CFS start mapping (plan 3.2, 3.4, 8a.4).
+// SameGroup lists every member of the mapped slot's same_material group and
+// LikelyRunAs the slot the printer is expected to actually run (the group's
+// first member); Warnings carries the canonicalisation and colour-distance
+// disclosures.
+type MappedFilament struct {
+	Index       int
+	ToolID      string
+	FileType    string
+	FileColor   string
+	Slot        string
+	SlotVendor  string
+	SlotName    string
+	SlotType    string
+	SlotColor   string
+	Distance    float64
+	SameGroup   []string
+	LikelyRunAs string
+	Warnings    []string
+}
+
+// DisplayName joins a brand and a name for display: just the name when it
+// already starts with the brand (case-insensitive), so "Generic" + "Generic PETG"
+// reads "Generic PETG", otherwise "<brand> <name>".
+func DisplayName(brand, name string) string {
+	brand, name = strings.TrimSpace(brand), strings.TrimSpace(name)
+	if brand == "" || strings.HasPrefix(strings.ToLower(name), strings.ToLower(brand)) {
+		return name
+	}
+	return brand + " " + name
 }

@@ -70,7 +70,7 @@ func TestExecute_StartPrint_NoWatchdogStillStarts(t *testing.T) {
 }
 
 // A Disarm error from the watchdog client is swallowed: a background daemon
-// problem must never gate a print starting (D5: stopping/starting a running
+// problem must never gate a print starting (stopping/starting a running
 // job must never be blocked by an unrelated component).
 type erroringDisarmWatchdog struct {
 	*fakeWatchdog

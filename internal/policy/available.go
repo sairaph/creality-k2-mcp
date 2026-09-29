@@ -17,12 +17,22 @@ import (
 // pending lookup done for it at all, since printer.Host was never the key
 // anything was ever locked or armed under.
 func (p *Policy) Available(printer domain.Printer, snap printerstate.Snapshot, settings domain.Settings) []printerstate.ActionGate {
-	var pending *printerstate.PendingAction
-	if identity := printerstate.Identity(snap); identity != printerstate.UnverifiedIdentity {
-		pending = p.locks.get(identity).getPending()
+	return GatesFor(printer, p.Derive(snap), settings)
+}
+
+// Derive is the derivation every reader of a snapshot should use when it also
+// shows or gates actions: printerstate.DeriveActivityState with this
+// identity's pending action and the start-window record applied (plan 8a.1),
+// so the state a caller sees and the gates Execute enforces cannot disagree
+// about a print start in flight. A snapshot whose identity could not be
+// verified has no per-identity records to apply.
+func (p *Policy) Derive(snap printerstate.Snapshot) printerstate.Derived {
+	identity := printerstate.Identity(snap)
+	if identity == printerstate.UnverifiedIdentity {
+		return printerstate.DeriveActivityState(snap, nil)
 	}
-	derived := printerstate.DeriveActivityState(snap, pending)
-	return GatesFor(printer, derived, settings)
+	pl := p.locks.get(identity)
+	return deriveFor(pl, snap, pl.getPending())
 }
 
 // GatesFor is AvailableFor plus the per-printer allow_control gate: Execute
@@ -56,6 +66,10 @@ func AvailableFor(derived printerstate.Derived, settings domain.Settings) []prin
 func gateFor(spec actionSpec, derived printerstate.Derived) printerstate.ActionGate {
 	if err := checkGate(spec, derived); err != nil {
 		return printerstate.ActionGate{Name: string(spec.Name), Status: "blocked", Reason: err.Message}
+	}
+	// A CFS-connected start always goes through the mapping proposal.
+	if spec.Name == ActionStartPrint && derived.CFSConnected {
+		return printerstate.ActionGate{Name: string(spec.Name), Status: "needs_confirmation"}
 	}
 	if spec.Confirmation == ConfirmationProposalToken {
 		return printerstate.ActionGate{Name: string(spec.Name), Status: "needs_confirmation"}

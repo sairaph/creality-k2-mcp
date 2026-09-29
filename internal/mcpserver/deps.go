@@ -237,3 +237,16 @@ type Deps struct {
 	// unavailable.
 	CameraRecorder CameraRecorder
 }
+
+// derive is the one derivation every MCP tool that shows state or actions
+// uses: the policy engine's (Policy.Derive), which adds this process's
+// start-window record to printerstate's own derivation (plan-v0.2.0.md 8a.1),
+// so the start window is reflected in every tool reply and never disagrees
+// with the gates Execute enforces. Without a policy engine (a nil field in a
+// hand-built Deps) it falls back to the plain derivation.
+func (s *Server) derive(snap printerstate.Snapshot) printerstate.Derived {
+	if s.deps.PolicyEngine != nil {
+		return s.deps.PolicyEngine.Derive(snap)
+	}
+	return printerstate.DeriveActivityState(snap, nil)
+}

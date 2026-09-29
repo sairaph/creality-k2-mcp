@@ -240,6 +240,7 @@ func TestReadOnlyToolsPresentInEveryPreset(t *testing.T) {
 	names := []string{
 		"list_printers", "discover_printers", "get_printer_status",
 		"get_current_job", "list_job_history", "list_console_messages",
+		"get_filaments", "list_filament_catalog",
 	}
 	for _, preset := range []domain.ToolPreset{domain.PresetMonitor, domain.PresetCamera, domain.PresetControl} {
 		deps, _ := singlePrinterDeps(t, preset, nil)

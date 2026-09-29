@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/sairaph/creality_k2_mcp/internal/domain"
@@ -385,8 +386,11 @@ func TestExecute_CFSConnectedBlocksResumeButNotCancel(t *testing.T) {
 	if !ok || perr.Code != CodeUnavailable {
 		t.Fatalf("resume err = %#v, want CodeUnavailable (CFS connected)", err)
 	}
+	if !strings.Contains(perr.Message, "not issued by this server") {
+		t.Fatalf("resume message = %q, want the pause-record refusal", perr.Message)
+	}
 
-	// D5: cancel stays available while CFS is connected.
+	// The CFS rule table (plan-v0.2.0.md 3.1): cancel is cfsNone, never blocked by a CFS signal.
 	proposal, err := p.Execute(context.Background(), f.deps(), printer, testSettings(), ActionCancelPrint, Params{}, "")
 	if err != nil {
 		t.Fatalf("cancel proposal while CFS connected: %v", err)

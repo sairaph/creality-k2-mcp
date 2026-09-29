@@ -35,6 +35,12 @@ type printerLock struct {
 
 	pendingMu sync.Mutex
 	pending   *printerstate.PendingAction
+
+	// startRec is the start-window record (startwindow.go) and pauseRec the
+	// resume record (resume.go); both are guarded by pendingMu and, unlike
+	// pending, are NOT cleared when a call returns.
+	startRec *startInFlight
+	pauseRec *pauseRecord
 }
 
 func (l *printerLock) setPending(p *printerstate.PendingAction) {

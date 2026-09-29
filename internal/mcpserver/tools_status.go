@@ -166,7 +166,9 @@ func getPrinterStatusHandler(s *Server) func(context.Context, *mcp.CallToolReque
 		}
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		// The policy engine's derivation adds the start-window record (plan 8a.1) so
+		// the state shown here and the gates Execute enforces cannot disagree.
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 		block.Watchdog = s.watchdogBlock(ctx, snap)
 		block.Camera = s.cameraBlock(ctx, printer)
@@ -286,10 +288,12 @@ func statusGuidance(block printerstate.StateBlock) string {
 	var body string
 	switch block.ActivityState {
 	case printerstate.StateIdle, printerstate.StateComplete, printerstate.StateCancelled:
-		if block.CFSConnected {
-			// The CFS note below explains the block; never call the printer
-			// "safe to start" in the same reply that refuses start_print.
-			body = "The printer is idle, but starting a new job is not possible right now (see below). Call " +
+		if block.CFSConnected && (block.CFS == nil || block.CFS.State != printerstate.CFSStateIdle) {
+			body = "The printer is idle, but the CFS is not ready for a start (see below): start_print is refused until it " +
+				"is. Call get_current_job for the last job's summary."
+		} else if block.CFSConnected {
+			body = "The printer is idle. Call list_gcode_files to pick a file, then start_print (if control tools are " +
+				"enabled for this printer): with a CFS connected that is a two-step mapping proposal, see below. Call " +
 				"get_current_job for the last job's summary."
 		} else {
 			body = "The printer is idle and safe to start a new job. Call list_gcode_files to pick a file, then " +
@@ -302,10 +306,18 @@ func statusGuidance(block printerstate.StateBlock) string {
 			"two-step proposal flow: call it once with no confirm_token to see what will happen, then again " +
 			"with the returned confirm_token to actually cancel)."
 	case printerstate.StatePreparing:
-		body = "The printer is running START_PRINT's own prepare/heat/home sequence for a job that is about " +
-			"to begin printing. Writes are blocked except cancel_print (call it once with no confirm_token to " +
-			"see what will happen, then again with the returned confirm_token to actually cancel) until it " +
-			"settles into printing; call get_printer_status again shortly."
+		if block.StartWindow {
+			body = "The printer is in the self-test of a print start (several minutes, with the job still reported as " +
+				"standby, before it starts printing). Every write is refused during it except set_light and uploading or " +
+				"deleting files other than the one being started; cancel_print from this server is refused too, because " +
+				"Moonraker's cancel is not known to stop the self-test: stop it on the printer screen. Call " +
+				"get_printer_status again shortly to follow it."
+		} else {
+			body = "The printer is running START_PRINT's own prepare/heat/home sequence for a job that is about " +
+				"to begin printing. Writes are blocked except set_light and cancel_print (call cancel_print once with no " +
+				"confirm_token to see what will happen, then again with the returned confirm_token to actually cancel) " +
+				"until it settles into printing; call get_printer_status again shortly."
+		}
 	case printerstate.StatePaused:
 		body = "The printer is paused."
 		if block.StoredHotendTargetC != nil {
@@ -336,8 +348,12 @@ func statusGuidance(block printerstate.StateBlock) string {
 	case printerstate.StateCancelling, printerstate.StatePausing, printerstate.StateResuming:
 		body = "A pause, resume or cancel this server issued has not settled yet. Call get_printer_status " +
 			"again in a few seconds to see the outcome before issuing another write."
-	case printerstate.StateUpgrading, printerstate.StateRecoveryPending, printerstate.StateFilamentOperation,
-		printerstate.StateCFSOperation:
+	case printerstate.StateFilamentOperation, printerstate.StateCFSOperation:
+		body = "The CFS or the extruder is moving filament (a load, unload or feed reported by the printer, or an operation this " +
+			"server just started). Writes are blocked except set_light until it finishes; nothing can be done from here but " +
+			"wait, so call get_printer_status again in a little while. Finish or stop the operation on the printer screen if it " +
+			"does not end. get_filaments shows the CFS state and its reasons."
+	case printerstate.StateUpgrading, printerstate.StateRecoveryPending:
 		body = "The printer reports a state this server cannot safely act around yet. Monitor with " +
 			"get_printer_status; writes are blocked until it moves to a recognised, settled state."
 	case printerstate.StateIdentityMismatch, printerstate.StateIdentityUnverified:
@@ -351,9 +367,7 @@ func statusGuidance(block printerstate.StateBlock) string {
 			"list_printers to check reachability."
 	}
 	if block.CFSConnected {
-		body += " The CFS unit reports connected, which additionally blocks start, resume and setpoint " +
-			"changes until it is disconnected or a later version's CFS support lands; pause and cancel of a " +
-			"running print stay available."
+		body += cfsGuidance(block)
 	}
 	if idleHeatersUnprotected(block) {
 		body += " The idle-heat watchdog daemon (dev_docs/safety-architecture.md section 10 D2) could not be " +
@@ -409,7 +423,7 @@ func getCurrentJobHandler(s *Server) func(context.Context, *mcp.CallToolRequest,
 		}
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		front := &jobFront{StateBlock: block}
@@ -584,7 +598,7 @@ func listJobHistoryHandler(s *Server) func(context.Context, *mcp.CallToolRequest
 		}
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		list, err := deps.Moonraker.HistoryList(ctx, jobHistoryFetchLimit, 0)
@@ -685,7 +699,7 @@ func listConsoleMessagesHandler(s *Server) func(context.Context, *mcp.CallToolRe
 		}
 		deps := s.deps.PrinterClients(printer)
 		snap := printerstate.Take(ctx, deps, printer)
-		derived := printerstate.DeriveActivityState(snap, nil)
+		derived := s.derive(snap)
 		block := printerstate.BuildStateBlock(snap, derived, nil)
 
 		count := consoleMessagesDefaultCount
@@ -736,4 +750,66 @@ func listConsoleMessagesHandler(s *Server) func(context.Context, *mcp.CallToolRe
 		}
 		return successResult(front, nil, body), nil, nil
 	}
+}
+
+// cfsGuidance is the per-state guidance for a printer with a CFS connected
+// (dev_docs/plan-v0.2.0.md sections 2.5, 3.1 and 8a.6): what works from this
+// server, what must be done at the printer, and which signals cannot be
+// detected. The cfs state is derived bucket-first (a print is never called "busy"
+// just because the idle quiescence test does not hold during printing), so the
+// in_print wording depends on the activity state: printing, paused and the start
+// window differ in what is available, and this never claims a tool works that the
+// actions list refuses.
+func cfsGuidance(block printerstate.StateBlock) string {
+	state := "unknown"
+	var reasons []string
+	if block.CFS != nil {
+		state, reasons = block.CFS.State, block.CFS.Reasons
+	}
+	var b strings.Builder
+	b.WriteString(" A CFS is connected (cfs state: " + state + "). Call get_filaments to see its slots, their stored definitions and which are editable.")
+	switch state {
+	case printerstate.CFSStateIdle:
+		b.WriteString(" The CFS is idle: start_print works as a two-step mapping proposal (the mapping is shown for the user to confirm), " +
+			"set_filament_definition can relabel a slot, and the setpoint tools work as usual except that the flow factor is never changed while a CFS is connected.")
+	case printerstate.CFSStateInPrint:
+		b.WriteString(inPrintGuidance(block))
+	case printerstate.CFSStateBusy:
+		b.WriteString(" The CFS is busy (feeding, loading or otherwise not at rest), so CFS-dependent writes are refused until it settles: call get_printer_status again shortly." + reasonsText(reasons))
+	case printerstate.CFSStateError:
+		b.WriteString(" The CFS reports an error (a runout, a jam or an error code). Clear it on the printer screen or in Creality Print; this server has no tool for it. While a print is running, pause_print and cancel_print are not blocked by it." + reasonsText(reasons))
+	default:
+		b.WriteString(" The CFS could not be fully read (port 9999 unreachable or a field missing), so CFS-dependent writes are refused (fail closed) until it can be." + reasonsText(reasons))
+	}
+	b.WriteString(" Not detectable from here: a tool change, whether a slot physically holds filament, and a spool being pre-loaded or an RFID scan in progress; ask the user.")
+	return b.String()
+}
+
+// inPrintGuidance is the CFS wording while the cfs state is in_print, which the
+// frontmatter reports for printing, paused and preparing alike.
+func inPrintGuidance(block printerstate.StateBlock) string {
+	switch block.ActivityState {
+	case printerstate.StatePaused:
+		return " The print is paused. Available now: cancel_print, exclude_object (while the CFS reports no error) and resume_print only for a clean pause this server issued (the actions list says whether it is). " +
+			"Pause, fan and speed changes are not available while paused, and the nozzle temperature and flow factor cannot be changed with a CFS connected. " +
+			"If the pause was made at the printer screen, by another program, or after a runout or error, resume on the printer screen or in Creality Print."
+	case printerstate.StatePreparing:
+		if block.StartWindow {
+			return " This is the start window: the CFS is part of the print start. Every write except set_light and uploads or deletes of other files is refused, " +
+				"and cancel_print from this server is refused too (stop it on the printer screen)."
+		}
+		return " The print is preparing: cancel_print works and every setpoint is refused until it is printing."
+	default:
+		return " The CFS is in a print. While it reports no error, set_fan_speed, set_speed_factor and exclude_object are available (a filament change can reset a fan or speed value), " +
+			"and pause_print and cancel_print are never blocked by a CFS signal. The nozzle temperature and the flow factor cannot be changed from here during a CFS print, " +
+			"because the CFS changes them itself during filament changes and this server cannot see a tool change. After a pause, resume_print works only for a clean pause this server issued."
+	}
+}
+
+// reasonsText renders the CFS reasons for guidance, or nothing when there are none.
+func reasonsText(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	return " Reasons: " + strings.Join(reasons, "; ") + "."
 }

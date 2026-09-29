@@ -14,9 +14,9 @@ full design.
 ## Supported printers
 
 Creality K2 family printers running Moonraker/Klipper, reached over the
-local network. Tested on a **K2 base (model F021)**. CFS (multi-material)
-support is planned for **v0.2.0**; until then, control tools are disabled
-while a CFS unit reports connected (monitoring and the camera keep working).
+local network. Tested on a **K2 base (model F021)** with a CFS. The CFS
+(multi-material) is supported as of **v0.2.0**, see [CFS](#cfs-multi-material)
+below.
 
 ## Install
 
@@ -77,7 +77,7 @@ Which tools get registered at all is controlled by a preset
 
 | Preset | Registers |
 | --- | --- |
-| `monitor` | Status, files (read-only), job history, console - read-only only |
+| `monitor` | Status, filaments (CFS and side spool slots, catalog), files (read-only), job history, console - read-only only |
 | `camera` (default) | Everything in `monitor`, plus snapshot, live view, and recording |
 | `control` | Everything in `camera`, plus every control (write) tool |
 
@@ -115,6 +115,48 @@ reference and [docs/tools.md](docs/tools.md) for every tool.
 
 Full detail: [docs/safety.md](docs/safety.md).
 
+## CFS (multi-material)
+
+With a CFS connected, the server can read every slot, relabel a slot, and
+start a multi-colour print from a file that is already on the printer, all
+through the printer's own definitions (nothing of Creality's filament catalog
+is built into this server; names always come from the printer).
+
+**What works**
+
+- `get_filaments` (and `creality_k2_mcp filaments`) shows each CFS slot and the
+  side spool: the stored definition (brand, material, colour, nozzle range),
+  whether it can be edited, and the printer's own refill groups.
+  `list_filament_catalog` lists the definitions a slot can be set to.
+- `set_filament_definition` relabels one slot (only while idle and the CFS is
+  at rest). It never moves filament, and it reads the result back from both the
+  printer and Moonraker.
+- `start_print` with a CFS is a two-step **mapping proposal**: the first call
+  sends nothing and shows which slot each filament of the file will use (Creality's
+  own matching algorithm), with a warning when the printer may run a different
+  slot of the same refill group. The AI must show you that mapping and ask you to
+  confirm that each slot really holds that spool and that the bed is clear; only
+  then does the second call, with the token, send the print. The reply says
+  `sent`, never `started`: the printer then runs a self-test of several minutes.
+- `pause_print` and `cancel_print` are never blocked by a CFS signal.
+  `set_fan_speed`, `set_speed_factor` and `exclude_object` work during a print
+  while the CFS reports no error. `resume_print` works only for a clean pause this
+  server issued.
+
+**What stays at the printer**
+
+- Clearing a CFS error or runout, RFID-tagged spools, loading and unloading
+  filament, changing the nozzle temperature or flow during a CFS print, editing the
+  side spool (not yet verified), and stopping a print during its start self-test
+  (not yet verified from here).
+
+**What the server cannot detect** (so it asks you): a tool change during a print,
+whether a slot physically holds filament, and a spool being pre-loaded or an RFID
+scan in progress.
+
+The exact per-tool rules and the reasons behind them are in
+[Safety model](docs/safety.md#cfs-multi-material-support).
+
 ## Camera
 
 - **Snapshot** - one still frame, `get_camera_snapshot` or
@@ -133,8 +175,8 @@ file locations, limits and troubleshooting: [docs/camera.md](docs/camera.md).
 ## CLI, TUI, doctor, uninstall
 
 `creality_k2_mcp` is one binary: the MCP server, an install wizard, a TUI,
-and a set of one-shot commands (`printers`, `status`, `snapshot`, `camera`,
-`doctor`, `update`) that share their logic with the MCP tools, so they can
+and a set of one-shot commands (`printers`, `status`, `filaments`, `snapshot`,
+`camera`, `doctor`, `update`) that share their logic with the MCP tools, so they can
 never disagree. Run it with no arguments in a terminal to open the TUI.
 
 ```sh

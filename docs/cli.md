@@ -273,6 +273,42 @@ $ creality_k2_mcp status k2-5885 --json
 Exit codes: 0 on success; 1 if the printer could not be resolved; 2 on a
 usage error.
 
+The CLI runs in its own process, so it derives state from the printer's signals
+alone. The MCP server additionally remembers, in memory, a print start it sent
+itself, so during the first moments of a start (before the printer shows any
+self-test signal) the server reports `preparing` where this command may still show
+`idle`. Once the printer shows its self-test progress or its filament map the two
+agree.
+
+### `creality_k2_mcp filaments [printer] [--json]`
+
+Shows the derived state, the CFS state, and the CFS units and side spool slots: the same
+`internal/filaments` code the `get_filaments` tool uses, read-only. The printer argument
+may come before or after `--json`. For each slot: the stored definition (status,
+brand, name, material, colour, nozzle range), whether it is selected at the hub,
+whether `set_filament_definition` could edit it right now and why not (including the
+printer's current state: a printing printer or a busy CFS shows every slot not editable), and the printer's own
+refill groups. Names come from the printer over port 9999; if that cannot be read
+the output says so and shows Moonraker's material codes only.
+
+```sh
+$ creality_k2_mcp filaments
+K2-5885 (192.168.1.102)
+Auto-refill: on
+Unit T1 (MF003), 29 C, 35% humidity
+  T1A         defined, Acme Test PLA, PLA, #ff0000, nozzle 190-240 C (editable)
+  T1B         defined, Acme Test PETG, PETG, #000000, nozzle 220-270 C (editable)
+Refill groups (slots the printer treats as interchangeable): T1A (PLA #ff0000); T1B (PETG #000000)
+```
+
+| Flag | What it does |
+| --- | --- |
+| `--json` | Print the view as JSON instead of the text summary |
+
+A slot status describes the stored definition, not a sensor: whether filament is
+physically loaded cannot be detected. Exit codes: 0 on success; 1 if the printer
+could not be resolved; 2 on a usage error.
+
 ### `creality_k2_mcp snapshot [printer] [--out FILE] [--force]`
 
 Saves one still frame from a printer's onboard camera to a local JPEG file,
@@ -408,4 +444,5 @@ period.
   these commands read and write.
 - [Camera](camera.md) for what `camera open`/`record`/`snapshot` actually
   capture and where files land.
-- [Tools](tools.md) for the MCP tool each command mirrors.
+- [Tools](tools.md) for the MCP tool each command mirrors. `status` mirrors
+  `get_printer_status` and `filaments` mirrors `get_filaments`.

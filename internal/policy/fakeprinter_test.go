@@ -47,6 +47,10 @@ type fakePrinter struct {
 	boxState   string
 	cfsConnect int
 
+	// cfs is the CFS half of the fake (fakecfs_test.go): 9999 CFS signals,
+	// boxsInfo, catalog, file records and the writes that mutate them.
+	cfs *fakeCFS
+
 	storedHotendTemp       float64
 	storedFan0, storedFan2 float64
 
@@ -76,6 +80,11 @@ type fakePrinter struct {
 	// so a test can force Execute's settle poll to time out deterministically
 	// without waiting out a real multi-second timeout.
 	mute bool
+
+	// failTemplate makes RunTemplate fail (the M221 reset failure case).
+	failTemplate bool
+	// templateCalls counts every RunTemplate call (M221, heaters, fans...).
+	templateCalls int
 
 	printStartCalls  int
 	printPauseCalls  int
@@ -108,6 +117,7 @@ func newFakePrinter() *fakePrinter {
 		nozzleCap:       300,
 		bedCap:          100,
 		files:           map[string]bool{},
+		cfs:             newFakeCFS(),
 	}
 }
 
@@ -284,7 +294,7 @@ func (f *fakePrinter) rawObjects() map[string]any {
 			"filename": f.filename, "state": f.printState,
 			"print_duration": f.printDuration, "total_duration": f.printDuration,
 		},
-		"pause_resume": map[string]any{"is_paused": f.isPaused},
+		"pause_resume": f.pauseResumeRaw(),
 		"idle_timeout": map[string]any{"state": f.idleState},
 		"virtual_sdcard": map[string]any{
 			"is_active": f.sdActive,
@@ -305,8 +315,8 @@ func (f *fakePrinter) rawObjects() map[string]any {
 		"output_pin fan1": map[string]any{"value": f.fan1},
 		"output_pin fan2": map[string]any{"value": f.fan2},
 		"output_pin LED":  map[string]any{"value": f.led},
-		"filament_rack":   map[string]any{},
-		"box":             map[string]any{"state": f.boxState},
+		"filament_rack":   f.rackRaw(),
+		"box":             f.cfs.moonBox(f.boxState),
 		"gcode_macro PRINTER_PARAM": map[string]any{
 			"hotend_temp": f.storedHotendTemp, "fan0_speed": f.storedFan0, "fan2_speed": f.storedFan2,
 			"fan0_min": 25, "fan1_min": 50, "fan2_min": 100,
@@ -315,6 +325,9 @@ func (f *fakePrinter) rawObjects() map[string]any {
 	}
 	if f.omitProductParam {
 		delete(out, "gcode_macro product_param")
+	}
+	if f.cfs.omitBox {
+		delete(out, "box")
 	}
 	return out
 }
@@ -472,6 +485,10 @@ func (f *fakePrinter) PrintCancel(ctx context.Context) error {
 func (f *fakePrinter) RunTemplate(ctx context.Context, t moonraker.Template, args map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.templateCalls++
+	if f.failTemplate {
+		return errFakeUnreachable
+	}
 	switch t {
 	case moonraker.TemplateSetHeaterTemperature:
 		target, _ := strconv.ParseFloat(args["target"], 64)
@@ -570,14 +587,32 @@ func (f *fakePrinter) Metadata(ctx context.Context, filename string) (moonraker.
 func (f *fakePrinter) ReadStatus(ctx context.Context) (crealityws.Status, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return crealityws.Status{
-		State:         crealityws.Int{Value: 0, Present: true},
-		DeviceState:   crealityws.Int{Value: 0, Present: true},
-		UpgradeStatus: crealityws.Int{Value: 0, Present: true},
-		RepoPlrStatus: crealityws.Int{Value: 0, Present: true},
-		CfsConnect:    crealityws.Int{Value: f.cfsConnect, Present: true},
-		LightSw:       crealityws.Int{Value: int(f.led), Present: true},
-	}, nil
+	c := f.cfs
+	if c.ws9999Unreachable {
+		return crealityws.Status{}, errFakeUnreachable
+	}
+	p := func(name string, v int) crealityws.Int {
+		if c.omit[name] {
+			return crealityws.Int{}
+		}
+		return crealityws.Int{Value: v, Present: true}
+	}
+	st := crealityws.Status{
+		State:          p("state", 0),
+		DeviceState:    p("deviceState", c.deviceState),
+		FeedState:      p("feedState", c.feedState),
+		UpgradeStatus:  p("upgradeStatus", c.upgradeStatus),
+		RepoPlrStatus:  p("repoPlrStatus", c.repoPlrStatus),
+		MaterialStatus: p("materialStatus", c.materialStatus),
+		CfsConnect:     p("cfsConnect", f.cfsConnect),
+		LightSw:        p("lightSw", int(f.led)),
+		WithSelfTest:   p("withSelfTest", c.withSelfTest),
+		EnableSelfTest: p("enableSelfTest", c.enableSelfTest),
+	}
+	if !c.omit["err"] {
+		st.Err = crealityws.StatusErr{ErrCode: c.errcode, Key: c.errkey, Present: true}
+	}
+	return st, nil
 }
 
 func (f *fakePrinter) SetLight(ctx context.Context, on bool) (bool, error) {
@@ -598,4 +633,21 @@ func (f *fakePrinter) deps() Deps {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return Deps{Moonraker: f, WS9999: f, Watchdog: f.watchdog}
+}
+
+// pauseResumeRaw renders pause_resume including Creality's resume_err.
+func (f *fakePrinter) pauseResumeRaw() map[string]any {
+	out := map[string]any{"is_paused": f.isPaused}
+	if !f.cfs.omit["resume_err"] {
+		out["resume_err"] = f.cfs.resumeErr
+	}
+	return out
+}
+
+// rackRaw renders the side spool holder (filament_rack) from the fake slot.
+func (f *fakePrinter) rackRaw() map[string]any {
+	if m := f.cfs.slotAt(0, 0); m != nil {
+		return map[string]any{"material_type": "0" + m.RFID, "color_value": strings.TrimPrefix(m.Color, "#")}
+	}
+	return map[string]any{}
 }

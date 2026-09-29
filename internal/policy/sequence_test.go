@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -187,9 +188,10 @@ func TestSequence_TwoProcessesContendForTheSameLock(t *testing.T) {
 	}
 }
 
-// CFS connected mid-print (D5): start, resume and every setpoint action are
-// blocked, but pause and cancel stay available ("stopping must never be
-// blocked").
+// CFS connected mid-print (D5, converted to the section 3.1 table): the nozzle
+// and flow are refused (V5), speed and fan need a Known, error free CFS and are
+// allowed for a healthy one, and pause and cancel stay available ("stopping
+// must never be blocked").
 func TestSequence_CFSConnectedMidPrintBlocksControlButNotStopping(t *testing.T) {
 	setTestHome(t)
 	f := newFakePrinter()
@@ -203,8 +205,6 @@ func TestSequence_CFSConnectedMidPrintBlocksControlButNotStopping(t *testing.T) 
 		params Params
 	}{
 		{ActionSetNozzleTemperature, Params{TargetC: 210}},
-		{ActionSetFanSpeed, Params{Fan: domain.FanPart, FanPercent: 50}},
-		{ActionSetSpeedFactor, Params{Percent: 100}},
 		{ActionSetFlowFactor, Params{Percent: 100}},
 	}
 	for _, tc := range blocked {
@@ -214,6 +214,14 @@ func TestSequence_CFSConnectedMidPrintBlocksControlButNotStopping(t *testing.T) 
 			t.Errorf("%s err = %#v, want CodeUnavailable while CFS is connected", tc.name, err)
 		}
 	}
+
+	// Fan and speed are allowed for a Known, error free CFS and carry the CFS
+	// effect note (only when a CFS is connected).
+	fanRes := mustExecute(t, p, f, printer, ActionSetFanSpeed, Params{Fan: domain.FanPart, FanPercent: 50}, "")
+	if !strings.Contains(strings.Join(fanRes.Effects, " "), "next filament change can reset this") {
+		t.Errorf("fan effects = %v, want the CFS note", fanRes.Effects)
+	}
+	mustExecute(t, p, f, printer, ActionSetSpeedFactor, Params{Percent: 100}, "")
 
 	// Pause stays available.
 	pauseRes := mustExecute(t, p, f, printer, ActionPausePrint, Params{}, "")
@@ -232,7 +240,10 @@ func TestSequence_CFSConnectedMidPrintBlocksControlButNotStopping(t *testing.T) 
 	}
 }
 
-// start_print is blocked while CFS is connected, even while otherwise idle.
+// A bare Moonraker start is refused while a CFS is connected, even while
+// otherwise idle: start_print must go through the mapping proposal, which needs
+// the printer's own file record (a file the printer has no record of is refused
+// and PrintStart is never sent).
 func TestSequence_CFSConnectedBlocksStartPrint(t *testing.T) {
 	setTestHome(t)
 	f := newFakePrinter()
@@ -243,8 +254,11 @@ func TestSequence_CFSConnectedBlocksStartPrint(t *testing.T) {
 
 	_, err := p.Execute(context.Background(), f.deps(), printer, testSettings(), ActionStartPrint, Params{Filename: "model.gcode"}, "")
 	perr, ok := err.(*Error)
-	if !ok || perr.Code != CodeUnavailable {
-		t.Fatalf("err = %#v, want CodeUnavailable", err)
+	if !ok || perr.Code != CodeNotFound {
+		t.Fatalf("err = %#v, want CodeNotFound (no 9999 file record)", err)
+	}
+	if start, _, _, _ := f.counts(); start != 0 {
+		t.Fatalf("PrintStart was called %d times with a CFS connected", start)
 	}
 }
 
