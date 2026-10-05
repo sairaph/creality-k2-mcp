@@ -25,6 +25,9 @@ func DeriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 	// rows report it true without inspecting the box at all.
 	d.CFSKnown, d.CFSQuiescent, d.CFSError, d.CFSReasons = cfsFlagsFor(snap, d.CFSConnected)
 	d.Qmode = qmodeFor(snap)
+	if r := bedMeshReason(snap); r != "" && snap.ServerInfoErr == nil {
+		d.Reasons = append(d.Reasons, r)
+	}
 	return d
 }
 
@@ -108,11 +111,11 @@ func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 	// away ("not available in state homing") although the verified start-window
 	// stop exists. So when the start-window signal holds, homing and calibrating
 	// derive as the start window (preparing, bucket PP: cancel allowed, every other
-	// write refused), with the reason naming the motion. liveStartSignal (the
-	// self-test progress or 9999 state 1, 9 or 7 with standby; a stale-able
-	// non-identity map alone does not count) never fires for printing, paused or error, so a RESUME that homes, a running print
-	// and a genuine homing or calibration outside a start window are unchanged.
-	if ok, reason := liveStartSignal(snap); ok {
+	// write refused), with the reason naming the motion. startWindowSignal needs
+	// live evidence of a start (cfs.go) and never fires for printing, paused or
+	// error, so a RESUME that homes, a running print and a genuine homing or
+	// calibration outside a start window are unchanged.
+	if ok, reason := startWindowSignal(snap); ok {
 		if h, hr := isHoming(snap); h {
 			reason += "; self-test homing (" + hr + ")"
 		} else if c, cr := isCalibrating(snap); c {
@@ -177,17 +180,51 @@ func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 	// derive as idle, complete or cancelled (bucket I) and let every write
 	// through while blocking cancel. print_stats standby, complete or
 	// cancelled (Klipper keeps the previous job's complete or cancelled until
-	// the next job starts) plus a 9999 withSelfTest that is not 100, or a
-	// non-identity box.map, is "preparing" (bucket PP: cancel allowed,
+	// the next job starts) plus live 9999 evidence of a start
+	// (startWindowSignal, cfs.go) is "preparing" (bucket PP: cancel allowed,
 	// everything else refused). It sits before the cancelled and complete rows
 	// so they cannot grant bucket I first, and after paused, printing's own
 	// rows and the transitions, so it can never shadow printing or paused. The
-	// policy layer adds its own in-flight record for the window before either
+	// policy layer adds its own in-flight record for the window before the
 	// signal has appeared.
 	if ok, reason := startWindowSignal(snap); ok {
 		d := busy(StatePreparing, BucketPP, cfsOK, reason, cfsReason)
 		d.StartWindow = true
 		return d
+	}
+
+	// Row 12: printing. Evaluated before row 11 since v0.3.1 so that row 14
+	// can sit between them; rows 11 and 12 need different print_stats states,
+	// so swapping them changes nothing else.
+	if isSettledPrinting(snap) {
+		return Derived{
+			State:        StatePrinting,
+			Bucket:       BucketP,
+			Class:        ClassBusy,
+			CFSConnected: cfsOK,
+			Reasons:      []string{"print_stats.state is printing, pause_resume.is_paused is false and virtual_sdcard.is_active is true", cfsReason},
+		}
+	}
+
+	// Row 14: filament_operation / cfs_operation. Two sources: this server's
+	// own pending lock on an operation it just started (the conservative
+	// signal 11-state-model.md section 1.1 row 14 allows), and, since v0.2.0,
+	// the 9999 CFS feed signals (cfsSignalOperation, plan 2.4). It sits after
+	// printing and paused on purpose (V6): a feed during a print is ordinary
+	// and must not turn printing into bucket U. Since v0.3.1 it sits before
+	// cancelled and complete, so a filament load on the printer screen after a
+	// finished or cancelled print derives filament_operation instead of a
+	// bucket-I state (field feedback item 6).
+	if pending.Active(now, PendingFilamentOperation) {
+		return unknown(StateFilamentOperation, BucketU, cfsOK,
+			"server-initiated filament operation in progress with no reliable completion signal")
+	}
+	if pending.Active(now, PendingCFSOperation) {
+		return unknown(StateCFSOperation, BucketU, cfsOK,
+			"server-initiated CFS operation in progress with no reliable completion signal")
+	}
+	if ok, reason := cfsSignalOperation(snap, cfsOK); ok {
+		return unknown(StateFilamentOperation, BucketU, cfsOK, reason)
 	}
 
 	// Row 11: cancelled (settled).
@@ -198,17 +235,6 @@ func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 			Class:        ClassSafeToAct,
 			CFSConnected: cfsOK,
 			Reasons:      []string{"print_stats.state is cancelled, virtual_sdcard.is_active is false and idle_timeout.state is not Printing", cfsReason},
-		}
-	}
-
-	// Row 12: printing.
-	if isSettledPrinting(snap) {
-		return Derived{
-			State:        StatePrinting,
-			Bucket:       BucketP,
-			Class:        ClassBusy,
-			CFSConnected: cfsOK,
-			Reasons:      []string{"print_stats.state is printing, pause_resume.is_paused is false and virtual_sdcard.is_active is true", cfsReason},
 		}
 	}
 
@@ -231,26 +257,6 @@ func deriveActivityState(snap Snapshot, pending *PendingAction) Derived {
 			CFSConnected: cfsOK,
 			Reasons:      []string{"print_stats.state is complete and idle_timeout.state is not Printing (observed live after a finished print: idle_timeout Ready, 9999 state 2, deviceState 0)", cfsReason},
 		}
-	}
-
-	// Row 14: filament_operation / cfs_operation. Two sources: this server's
-	// own pending lock on an operation it just started (the conservative
-	// signal 11-state-model.md section 1.1 row 14 allows), and, since v0.2.0,
-	// the 9999 CFS feed signals (cfsSignalOperation, plan 2.4). It sits after
-	// printing, paused and complete on purpose (V6): a feed during a print is
-	// ordinary and must not turn printing into bucket U, so a standby printer
-	// that is feeding is filament_operation while cancelled/complete stay
-	// bucket I with CFSQuiescent false and the policy layer refuses on that.
-	if pending.Active(now, PendingFilamentOperation) {
-		return unknown(StateFilamentOperation, BucketU, cfsOK,
-			"server-initiated filament operation in progress with no reliable completion signal")
-	}
-	if pending.Active(now, PendingCFSOperation) {
-		return unknown(StateCFSOperation, BucketU, cfsOK,
-			"server-initiated CFS operation in progress with no reliable completion signal")
-	}
-	if ok, reason := cfsSignalOperation(snap, cfsOK); ok {
-		return unknown(StateFilamentOperation, BucketU, cfsOK, reason)
 	}
 
 	// Row 15: upgrading. 9999-only signal; only fires when 9999 answered and
@@ -439,22 +445,21 @@ func isPreparing(snap Snapshot) (bool, string) {
 	return true, "print_stats.state is printing with print_duration 0 and virtual_sdcard.is_active true (START_PRINT still running)"
 }
 
-// isCalibrating implements row 6: any of three OR'd corroboration signals.
+// isCalibrating implements row 6: any of the OR'd corroboration signals.
 // None being available (all nil/absent) means this row cannot positively
 // confirm calibrating; it does not fail anything closed by itself.
+//
+// virtual_sdcard.bed_mesh_calibate_state is deliberately not one of them
+// (v0.3.1): it behaves as "a bed mesh is loaded", not "levelling in
+// progress". It stays true for a whole print after the self-test levels the
+// bed, and after a levelling from the printer screen until the next reboot,
+// so on its own it trapped an idle printer in calibrating. Real levelling
+// motion is still caught by leveling_calibration, the auto-PID flags and,
+// through idle_timeout Printing, busy_command (row 18, the same bucket B).
+// bedMeshReason names the flag in the reasons instead.
 func isCalibrating(snap Snapshot) (bool, string) {
 	if snap.CustomMacro != nil && snap.CustomMacro.LevelingCalibration != nil && *snap.CustomMacro.LevelingCalibration != 0 {
 		return true, "custom_macro.leveling_calibration is nonzero"
-	}
-	// bed_mesh_calibate_state stays true for the whole print after the
-	// pre-print self-test levels the bed (observed live 2026-09-29, CFS print
-	// started with the self-test). A job that is printing or paused is
-	// therefore never "calibrating" because of this flag alone: otherwise the
-	// running print derives bucket B and pause/cancel become unavailable,
-	// which "stopping must never be blocked" forbids.
-	if snap.VirtualSDCard != nil && snap.VirtualSDCard.BedMeshCalibrateState != nil && *snap.VirtualSDCard.BedMeshCalibrateState &&
-		!jobPrintingOrPaused(snap) {
-		return true, "virtual_sdcard.bed_mesh_calibate_state is true"
 	}
 	if snap.WS9999.Raw != nil {
 		if v, ok := snap.WS9999.Raw["bedTempAutoPid"]; ok && truthy(v) {
@@ -467,10 +472,16 @@ func isCalibrating(snap Snapshot) (bool, string) {
 	return false, ""
 }
 
-// jobPrintingOrPaused reports whether print_stats shows a job that is
-// printing or paused.
-func jobPrintingOrPaused(snap Snapshot) bool {
-	return snap.PrintStats != nil && (snap.PrintStats.State == "printing" || snap.PrintStats.State == "paused")
+// bedMeshReason is the reason naming a true bed_mesh_calibate_state outside a
+// printing or paused job (during a job it is expected), or "" otherwise.
+func bedMeshReason(snap Snapshot) string {
+	if snap.VirtualSDCard == nil || snap.VirtualSDCard.BedMeshCalibrateState == nil || !*snap.VirtualSDCard.BedMeshCalibrateState {
+		return ""
+	}
+	if snap.PrintStats != nil && (snap.PrintStats.State == "printing" || snap.PrintStats.State == "paused") {
+		return ""
+	}
+	return "virtual_sdcard.bed_mesh_calibate_state is true (a mesh is loaded; not treated as calibration)"
 }
 
 // truthy reports whether a raw decoded JSON value (float64, string or bool,
@@ -502,6 +513,12 @@ func isSettledPaused(snap Snapshot) bool {
 	}
 	return *snap.PauseResume.IsPaused
 }
+
+// SettledCancelled reports row 11's settle condition for snap on its own,
+// whatever row the derivation picked: a CFS feed right after a cancel derives
+// filament_operation (row 14 sits above row 11 since v0.3.1) although the
+// cancel itself has settled.
+func SettledCancelled(snap Snapshot) bool { return isSettledCancelled(snap) }
 
 // isSettledCancelled implements row 11's settle condition:
 // print_stats.state=="cancelled" AND virtual_sdcard.is_active==false AND

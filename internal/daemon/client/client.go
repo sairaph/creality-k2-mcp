@@ -366,39 +366,61 @@ func (c *Client) deleteRecordingOnce(ctx context.Context, id string) error {
 	return conn.Call(ctx, daemon.MethodRecordingDelete, daemon.RecordingDeleteParams{ID: id}, &res)
 }
 
+// snapshotReplyMargin is the part of the caller's deadline Snapshot keeps for
+// the daemon's reply (encoding and sending the JPEG) after the daemon's own
+// keyframe wait, so a daemon-side timeout reaches the caller as such.
+const snapshotReplyMargin = 2 * time.Second
+
 // Snapshot captures one decoded camera frame from host through the
 // daemon's hub (review backlog item 51: the rolling GOP buffer / keep-warm
-// snapshot path, MethodCameraSnapshot), autostarting the daemon (see
-// Alive) if a first attempt cannot reach it, then trying once more. This
-// is the one path get_camera_snapshot (internal/mcpserver), the CLI
-// "snapshot" command and the TUI's camera screen all use - there is no
-// other, direct-WebRTC fallback for any of them any more (owner design
-// decision, review backlog item 51: "stream at the camera's own rate when
-// needed and take snapshots from the stream").
+// snapshot path, MethodCameraSnapshot). This is the one path
+// get_camera_snapshot (internal/mcpserver), the CLI "snapshot" command and
+// the TUI's camera screen all use - there is no other, direct-WebRTC
+// fallback for any of them any more (owner design decision, review backlog
+// item 51: "stream at the camera's own rate when needed and take snapshots
+// from the stream").
+//
+// One deadline covers the whole call (plan-v0.3.1.md R6). Only a failure to
+// reach the daemon at all is retried, after autostarting it (see Alive):
+// nothing reached the daemon, so nothing can run twice. A request that
+// reached it is never retried; when the camera delivers no keyframe in time
+// the error is a *camera.NoKeyframeError. The daemon is told how long this
+// caller can still wait, so it stops when the caller would give up.
 func (c *Client) Snapshot(ctx context.Context, host string) (*camera.SnapshotResult, error) {
-	result, err := c.snapshotOnce(ctx, host)
-	if err == nil {
-		return result, nil
-	}
-	if !c.canAutostart() {
-		return nil, err
-	}
-	lock.EnsureRunning(c.executable, autostartArgs, lock.Options{
-		LockFile: c.paths.Lock,
-		LogFile:  c.paths.Log,
-	})
-	return c.snapshotOnce(ctx, host)
-}
-
-func (c *Client) snapshotOnce(ctx context.Context, host string) (*camera.SnapshotResult, error) {
 	conn, err := c.dial()
 	if err != nil {
-		return nil, err
+		if !c.canAutostart() {
+			return nil, err
+		}
+		lock.EnsureRunning(c.executable, autostartArgs, lock.Options{
+			LockFile: c.paths.Lock,
+			LogFile:  c.paths.Log,
+		})
+		if conn, err = c.dial(); err != nil {
+			return nil, err
+		}
 	}
 	defer conn.Close()
 
+	var budget time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = time.Until(deadline) - snapshotReplyMargin
+		if budget <= 0 {
+			return nil, fmt.Errorf("camera snapshot: too little time left to wait for a keyframe: %w", context.DeadlineExceeded)
+		}
+	}
+	wait := daemon.MaxSnapshotBudget
+	if budget > 0 && budget < wait {
+		wait = budget
+	}
+
 	var res daemon.CameraSnapshotResult
-	if err := conn.Call(ctx, daemon.MethodCameraSnapshot, daemon.CameraSnapshotParams{Host: host}, &res); err != nil {
+	// Round up: a budget below 1 ms must not read as 0, the daemon's "no budget".
+	params := daemon.CameraSnapshotParams{Host: host, BudgetMs: int64((budget + time.Millisecond - 1) / time.Millisecond)}
+	if err := conn.Call(ctx, daemon.MethodCameraSnapshot, params, &res); err != nil {
+		if strings.Contains(err.Error(), camera.NoKeyframeText) {
+			return nil, &camera.NoKeyframeError{Wait: wait}
+		}
 		return nil, err
 	}
 	img, err := jpeg.Decode(bytes.NewReader(res.ImageJPEG))

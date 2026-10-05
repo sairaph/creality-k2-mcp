@@ -111,9 +111,12 @@ type CameraStatusResult struct {
 
 // CameraSnapshotParams is MethodCameraSnapshot's request (review backlog
 // item 51): Host is the printer's camera host (Hub.Subscribe's own key),
-// matching CameraStatusParams.
+// matching CameraStatusParams. BudgetMs is how long the caller can still wait,
+// in milliseconds (0: the daemon's own MaxSnapshotBudget); the daemon never
+// waits longer than either.
 type CameraSnapshotParams struct {
-	Host string `json:"host"`
+	Host     string `json:"host"`
+	BudgetMs int64  `json:"budget_ms,omitempty"`
 }
 
 // CameraSnapshotResult answers MethodCameraSnapshot: one decoded camera

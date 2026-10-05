@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
 	"github.com/sairaph/creality-k2-mcp/internal/domain"
 	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 	"github.com/sairaph/mcp-wizard/render"
@@ -44,25 +46,17 @@ const (
 // noVideoMessage and noVideoHint are used whenever a camera call (snapshot,
 // recording, or the viewer stream) times out waiting for the printer's
 // camera to produce a complete keyframe with no other explanation (review
-// backlog item 47). dev_docs/camera-keyframe-rca.md's corrected analysis:
-// an earlier finding that "the K2 pauses its camera stream while idle" was
-// unsupported and has been withdrawn - a live proof-of-concept comparison
-// showed the printer's camera transport can stay continuously active (RTP
-// arriving steadily, no gaps) while still never producing a complete
-// keyframe, because a single RTP packet lost inside a 1280x720 IDR (which
-// spans many FU-A fragments) left that access unit stuck forever with
-// nothing ever asking for a retransmit. internal/camera now registers a
-// NACK generator/responder to fix that, but a keyframe can still fail to
-// arrive within any fixed budget on a lossy or congested network, so this
-// message stays honest about the actual, still-possible cause instead of
-// blaming printer idling.
-const (
-	noVideoMessage = "the printer's camera did not produce a complete keyframe within the wait budget; this is " +
-		"usually network packet loss on the camera stream, not the printer being unreachable; try again"
-	noVideoHint = "This is not necessarily a connection problem: call get_printer_status to confirm the printer " +
-		"is reachable, then simply try again - a keyframe can be delayed or lost to network conditions even " +
-		"while the printer and its camera are both working normally."
-)
+// backlog item 47). The field cause found in v0.3.1 (a keyframe larger than
+// the receive window, with the chamber light on) is fixed in internal/camera;
+// any remaining cause is not known, so the text claims none
+// (dev_docs/field-camera-transport-analysis.md).
+const noVideoHint = "Call get_printer_status to confirm the printer is reachable, then try again."
+
+// noVideoMessage states that no complete keyframe arrived, within wait when it
+// is known.
+func noVideoMessage(wait time.Duration) string {
+	return (&camera.NoKeyframeError{Wait: wait}).Error() + "; " + camera.NoKeyframeCause
+}
 
 // isNoVideoTimeout reports whether err is (or wraps) a context deadline
 // exceeded, the shape internal/camera.Snapshot's waitForKeyframe/

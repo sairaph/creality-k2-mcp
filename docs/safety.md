@@ -339,31 +339,42 @@ Why:
 
 ### The start window
 
-The self-test homes the printer and probes the bed. While the start window holds (the
-signals below, or this server's own record, with print_stats not printing or paused),
-that motion does not turn the state into `homing` or `calibrating`: it stays `preparing`
-(the reason names the self-test's homing or calibrating) so `cancel_print` remains
-available and every other write stays refused. A homing or calibration outside a start
-window, a running print and a RESUME that homes are unchanged. This server's own record
-is preferred; from the signals alone only the live ones count for motion (the self-test
-progress, or 9999 state 1, 9 or 7 with standby). A filament map that is not the identity
-map can be left over from an aborted print, so on its own it still says `preparing` for
-an otherwise idle printer but never relabels a genuine homing or calibration as the
-self-test's.
-
 After a start frame the printer runs a self-test of several minutes with the job
 still reported as standby (or as the previous job's complete or cancelled). Without
 care that would look like an idle printer. Two things cover it: the printer's own
 signals derive `preparing`, and this server keeps an in-memory record of a start it
-sent. The signals, with print_stats standby, complete or cancelled: the 9999 state
-reading 9 or 1 (a start in progress; observed live within a second of the start frame),
-7 (stopping), the self-test progress not finished, or a filament map that is not the
-identity map. The record ends after 15 minutes, when print_stats shows printing, paused
-or error, when it shows complete or cancelled for a different job (a different filename,
-metadata uuid or start time; a new printer print id alone does not end it), or when the
-9999 state reads 3 or 4 (a stopped or failed start) in a snapshot taken a few seconds
-after the start frame. State 4 (aborted) persists at rest after a stop and is never read
-as busy.
+sent.
+
+The signals need live evidence of a start, with print_stats standby, complete or
+cancelled and port 9999 answering:
+
+- the 9999 state reads 9 or 1 (a start in progress; observed within a second of every
+  start frame) or 7 (stopping), with deviceState 1 (or deviceState not reported), or
+- the self-test progress is not finished while the printer shows activity in the same
+  read: a 9999 state of 9, 1 or 7, a deviceState other than 0, or idle_timeout
+  Printing. Heater targets alone do not count, so heating an idle printer never opens
+  a start window. A filament load or unload (deviceState 10 or 11) is never a start.
+
+A leftover value alone never counts. After a printer power cycle the self-test progress
+was seen reading 0 at rest for more than a day, and a filament map that is not the
+identity map can survive an aborted print; with nothing moving and no start reported
+by the printer, it is idle.
+
+The record ends after 15 minutes; when print_stats shows printing, paused or error; when
+it shows complete or cancelled for a different job (a different filename, metadata uuid
+or start time; a new printer print id alone does not end it); when the 9999 state reads
+3 or 4 (a stopped or failed start) a few seconds after the start frame; or when, at
+least 10 s after the start frame, the printer is positively at rest: idle without the
+record, both heater targets 0, and 9999 answering with deviceState 0 and no start or
+stop state. That covers a start stopped on the printer screen and a start the printer
+never took. With port 9999 unreachable the record stays until one of the other rules.
+State 4 (aborted) persists at rest after a stop and is never read as busy.
+
+The self-test homes the printer and probes the bed. While the start window holds, that
+motion does not turn the state into `homing` or `calibrating`: it stays `preparing` (the
+reason names the self-test's homing or calibrating) so `cancel_print` remains available
+and every other write stays refused. A homing or calibration outside a start window, a
+running print and a RESUME that homes are unchanged.
 
 While the window is open the state is bucket `preparing`: every setpoint, slot edit and
 start is refused, and uploading over or deleting the file being started is refused;
@@ -374,7 +385,14 @@ which does not stop the self-test (print_stats has no job yet). This was verifie
 state 7 (stopping) appears right after the frame, the printer finishes its current self-test
 step (about 20 s), turns the heaters off, returns the map to identity, and is idle about a
 minute after the frame. The reply returns as soon as state 7 or 4 shows (up to 15 s) with
-effect `stopping` (or `sent` if neither is seen) and does not wait for the wind-down.
+effect `stopping` (or `sent` if neither is seen) and does not wait for the wind-down. With
+port 9999 unreachable the stop cannot be sent: stop the start on the printer screen.
+
+The way out of a window that does not end: `cancel_print`, the record's own end rules
+above, or restarting the AI client (or its MCP connection), which starts a new server
+process without the record. Never kill the MCP server process itself: in the field the
+Codex client did not start it again, and every later tool call failed until a new session;
+other clients may behave the same.
 
 The record lives in one server process. A second MCP client, or a restart, does not
 see it: it still sees the printer's own signals, which cover the window from the moment
@@ -382,9 +400,8 @@ the 9999 state changes, but not the very first instant of a start. The CLI and t
 likewise derive state from the printer's signals alone.
 
 After a refused map (`refused_map_mismatch`) the colour map had already been sent, so the
-printer may keep a non-identity map until the next start and show `preparing` with
-nothing printing; the reply says so and asks for the map to be cleared at the printer
-rather than for a blind retry.
+printer may keep a non-identity map until the next start; that map alone is not read as
+a start. The reply says so.
 
 Two flow-factor rules go with a CFS start. The start resets the flow factor to 100%
 first when it is not already (the purge volumes of a filament change depend on it), and

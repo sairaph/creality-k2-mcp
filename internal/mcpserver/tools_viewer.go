@@ -146,8 +146,7 @@ func openCameraViewBody(url string, printers []domain.Printer) string {
 		"network, and it stops working once this server's background daemon exits. Opening it does not open a " +
 		"second camera connection; one camera connection per printer is shared by every browser viewer, " +
 		"recording and snapshot in use at the same time.")
-	b.WriteString(" If the page does not show video right away, this is usually not a connection problem: " +
-		noVideoMessage + "; the page keeps waiting and starts showing video on its own once a complete " +
-		"keyframe arrives, with no need to reopen it.")
+	b.WriteString(" If the page shows no video yet, the camera stream has not delivered a complete keyframe: the page " +
+		"keeps waiting and starts showing video on its own once one arrives, with no need to reopen it.")
 	return b.String()
 }

@@ -2,11 +2,20 @@ package client
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sairaph/mcp-wizard/daemon/socket"
+
+	"github.com/sairaph/creality-k2-mcp/internal/camera"
 	"github.com/sairaph/creality-k2-mcp/internal/daemon"
 	"github.com/sairaph/creality-k2-mcp/internal/daemon/daemontest"
 	"github.com/sairaph/creality-k2-mcp/internal/policy"
@@ -316,5 +325,93 @@ func TestIsTestBinaryOrGuarded_SuffixMatching(t *testing.T) {
 		if got := isTestBinaryOrGuarded(tc.exe); got != tc.want {
 			t.Errorf("isTestBinaryOrGuarded(%q) = %v, want %v", tc.exe, got, tc.want)
 		}
+	}
+}
+
+// Field feedback item 3 (plan-v0.3.1.md R5, R6): one deadline covers the
+// snapshot, the daemon is told the caller's budget, and a camera that sends
+// no keyframe ends in a *camera.NoKeyframeError well inside that deadline,
+// with no second attempt. The camera host is a closed loopback port, so no
+// packet leaves this computer and no local service is contacted.
+func TestClient_SnapshotDeadline(t *testing.T) {
+	paths := startTestDaemon(t)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := l.Addr().String()
+	l.Close()
+	c := &Client{paths: paths}
+	ctx, cancel := context.WithTimeout(context.Background(), snapshotReplyMargin+time.Second)
+	defer cancel()
+	start := time.Now()
+	_, err = c.Snapshot(ctx, host)
+	elapsed := time.Since(start)
+	var nk *camera.NoKeyframeError
+	if !errors.As(err, &nk) {
+		t.Fatalf("err = %v, want a *camera.NoKeyframeError", err)
+	}
+	if nk.Wait <= 0 || nk.Wait > time.Second {
+		t.Fatalf("Wait = %s, want the budget left after the reply margin (about 1s)", nk.Wait)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v does not match context.DeadlineExceeded", err)
+	}
+	if elapsed >= snapshotReplyMargin+time.Second {
+		t.Fatalf("Snapshot took %s, past the caller's deadline", elapsed)
+	}
+}
+
+// A daemon that cannot be reached, with autostart unavailable, fails at once.
+func TestClient_SnapshotNoDaemon(t *testing.T) {
+	c := &Client{paths: daemon.PathsIn(t.TempDir())}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	if _, err := c.Snapshot(ctx, "127.0.0.1"); err == nil {
+		t.Fatal("Snapshot without a daemon: want an error")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Snapshot without a daemon took %s", elapsed)
+	}
+}
+
+// Plan R6, the other half: a request that reached the daemon is never sent
+// again, whatever it answered. A fake daemon counts the calls and answers with
+// the no-keyframe text, as the real hub does.
+func TestClient_SnapshotNoRetry(t *testing.T) {
+	dir := t.TempDir()
+	paths := daemon.PathsIn(dir)
+	srv := socket.New(dir, strings.TrimSuffix(filepath.Base(paths.Socket), ".sock"))
+	var calls atomic.Int32
+	var gotBudget atomic.Int64
+	srv.Handle(daemon.MethodCameraSnapshot, func(_ context.Context, raw json.RawMessage) (any, error) {
+		calls.Add(1)
+		var p daemon.CameraSnapshotParams
+		_ = json.Unmarshal(raw, &p)
+		gotBudget.Store(p.BudgetMs)
+		return nil, fmt.Errorf("daemon: snapshot of %s: %w", p.Host, &camera.NoKeyframeError{Wait: time.Second})
+	})
+	if err := srv.Open(); err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); _ = srv.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-done; srv.Close() })
+
+	c := &Client{paths: paths}
+	callCtx, callCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer callCancel()
+	_, err := c.Snapshot(callCtx, "printer")
+	var nk *camera.NoKeyframeError
+	if !errors.As(err, &nk) {
+		t.Fatalf("err = %v, want a *camera.NoKeyframeError", err)
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("the daemon received %d requests, want 1", n)
+	}
+	if b := gotBudget.Load(); b <= 0 || b > int64((10*time.Second-snapshotReplyMargin)/time.Millisecond) {
+		t.Fatalf("budget_ms = %d, want the caller's remaining time less the reply margin", b)
 	}
 }

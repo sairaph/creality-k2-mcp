@@ -91,6 +91,13 @@ const (
 	recorderMinFreeBytesToStop  uint64 = 512 << 20
 )
 
+// RecorderKeyframeWait is how long a recording start waits for the camera's
+// first keyframe. 25s, not a shorter value: live testing against a real K2
+// observed cold-connect latency (session open to first usable keyframe) up to
+// 16s, so a shorter wait cuts off recordings that would have started
+// successfully (dev_docs/t11e-soak-report.md, dev_docs/camera-keyframe-rca.md).
+const RecorderKeyframeWait = 25 * time.Second
+
 // Package variables, not constants, so a test can shrink them instead of
 // waiting out real multi-second/minute timings (the same pattern
 // camera_hub.go's reconnectBackoffMin/Max and viewer_stream.go's
@@ -98,12 +105,8 @@ const (
 var (
 	recorderStatePollInterval = 2 * time.Second
 	recorderDiskCheckInterval = 30 * time.Second
-	// recorderKeyframeWait is 25s, not a shorter value: live testing against
-	// a real K2 observed cold-connect latency (session open to first usable
-	// keyframe) up to 16s, so a shorter wait cuts off recordings that would
-	// have started successfully (dev_docs/t11e-soak-report.md, dev_docs/
-	// camera-keyframe-rca.md).
-	recorderKeyframeWait     = 25 * time.Second
+	// recorderKeyframeWait is RecorderKeyframeWait, shrinkable by a test.
+	recorderKeyframeWait     = RecorderKeyframeWait
 	recorderFragmentDuration = fmp4.DefaultFragmentDuration
 	recorderMaxKeyframeWait  = fmp4.DefaultMaxKeyframeWait
 	recorderMaxBufferedBytes = fmp4.DefaultMaxBufferedBytes
@@ -249,7 +252,7 @@ type recorderHub interface {
 	Subscribe(host string) (id int, ch <-chan camera.AccessUnit)
 	Unsubscribe(host string, id int)
 	RequestKeyframe(host string) error
-	Snapshot(ctx context.Context, host string) (*camera.SnapshotResult, error)
+	Snapshot(ctx context.Context, host string, budget time.Duration) (*camera.SnapshotResult, error)
 }
 
 var _ recorderHub = (*Hub)(nil)
@@ -851,7 +854,7 @@ type timelapseCaptureResult struct {
 // derived from, so a capture in flight when the recording stops is
 // cancelled promptly rather than running out its full budget.
 func captureTimelapseFrame(ar *activeRecording, hub recorderHub, layer *int, resultCh chan<- timelapseCaptureResult) {
-	result, err := hub.Snapshot(ar.ctx, ar.host)
+	result, err := hub.Snapshot(ar.ctx, ar.host, 0)
 	resultCh <- timelapseCaptureResult{result: result, layer: layer, err: err}
 }
 

@@ -278,7 +278,10 @@ func (s *Server) handleCameraSnapshot(ctx context.Context, raw json.RawMessage) 
 		return nil, fmt.Errorf("daemon: camera.snapshot requires host")
 	}
 
-	result, err := s.hub.Snapshot(ctx, p.Host)
+	if p.BudgetMs < 0 {
+		return nil, fmt.Errorf("daemon: camera.snapshot budget_ms must not be negative")
+	}
+	result, err := s.hub.Snapshot(ctx, p.Host, time.Duration(p.BudgetMs)*time.Millisecond)
 	if err != nil {
 		return nil, err
 	}

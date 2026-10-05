@@ -56,6 +56,9 @@ func newServer(config Config, deps Deps, extra ...func(*Server)) *Server {
 		deps.Policy = policyAvailableAdapter{settings: deps.Settings}
 	}
 
+	v := config.Version
+	serverVersion.Store(&v)
+
 	srv := &Server{
 		config: config,
 		deps:   deps,

@@ -384,8 +384,8 @@ func settleFuncFor(name ActionName, params Params) func(printerstate.Snapshot, p
 			return d.State == printerstate.StatePrinting
 		}
 	case ActionCancelPrint:
-		return func(_ printerstate.Snapshot, d printerstate.Derived) bool {
-			return d.State == printerstate.StateCancelled
+		return func(s printerstate.Snapshot, d printerstate.Derived) bool {
+			return d.State == printerstate.StateCancelled || printerstate.SettledCancelled(s)
 		}
 	case ActionSetNozzleTemperature:
 		return func(s printerstate.Snapshot, _ printerstate.Derived) bool {

@@ -24,8 +24,9 @@
 //     signal (dev_docs/cfs-state-analysis.md section 8.1): the CFS flags and
 //     the signal-fed filament_operation row use 9999 feedState/deviceState
 //     (a feed in progress is reported nowhere else), and the start-window
-//     row uses 9999 withSelfTest (the self-test runs with print_stats still
-//     standby, dev_docs/cfs-print-start.md section 4.3). Both only ever add
+//     row uses 9999 state, deviceState and withSelfTest with live activity
+//     (the self-test runs with print_stats still standby,
+//     dev_docs/cfs-print-start.md section 4.3). Both only ever add
 //     a busy reading, never grant idle, and neither can shadow printing or
 //     paused.
 package printerstate

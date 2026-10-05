@@ -107,9 +107,9 @@ func (d *daemonCameraLogger) flushPLI(host string) {
 	}
 }
 
-func (d *daemonCameraLogger) KeyframeReceived(host string, waited time.Duration) {
+func (d *daemonCameraLogger) KeyframeReceived(host string, waited time.Duration, packets int) {
 	d.flushPLI(host)
-	d.log.Printf("camera: keyframe received host=%s waited=%s", host, waited)
+	d.log.Printf("camera: keyframe received host=%s waited=%s packets=%d", host, waited, packets)
 }
 
 func (d *daemonCameraLogger) Error(host string, err error) {

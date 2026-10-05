@@ -20,12 +20,12 @@ func checkBucketAndCFS(spec actionSpec, derived printerstate.Derived) *Error {
 	// bucket change: cancelling (a cancel this server already issued) stays refused.
 	cancelDuringMacro := spec.Name == ActionCancelPrint && (derived.State == printerstate.StateResuming || derived.State == printerstate.StatePausing)
 	if !spec.AllowedBuckets[derived.Bucket] && !cancelDuringMacro {
-		return &Error{
-			Action: spec.Name,
-			Code:   CodeUnavailable,
-			Message: fmt.Sprintf("%s is not available in state %q (bucket %s): %s",
-				spec.Name, derived.State, derived.Bucket, strings.Join(nonEmpty(derived.Reasons), "; ")),
+		msg := fmt.Sprintf("%s is not available in state %q (bucket %s): %s",
+			spec.Name, derived.State, derived.Bucket, strings.Join(nonEmpty(derived.Reasons), "; "))
+		if derived.StartWindow {
+			msg += ". " + StartWindowWayOut
 		}
+		return &Error{Action: spec.Name, Code: CodeUnavailable, Message: msg}
 	}
 	return checkCFS(spec, derived, Params{})
 }

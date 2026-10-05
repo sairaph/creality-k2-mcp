@@ -2,6 +2,8 @@ package mcpserver
 
 import (
 	"fmt"
+	"os"
+	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
@@ -31,10 +33,23 @@ type StateFront interface {
 // when non-nil, is attached to the embedded StateBlock before rendering
 // (internal/policy's output, once a tool group wires it in); a nil actions
 // leaves whatever the caller already set on the block (normally empty).
+// serverVersion is this process's version for the state frontmatter, set by
+// newServer (atomic: tests build servers concurrently).
+var serverVersion atomic.Pointer[string]
+
+// stampServer records which server process answered (field feedback item 4).
+func stampServer(b *printerstate.StateBlock) {
+	if v := serverVersion.Load(); v != nil {
+		b.ServerVersion = *v
+	}
+	b.ServerPID = os.Getpid()
+}
+
 func successResult(front StateFront, actions []printerstate.ActionGate, body string) *mcp.CallToolResult {
 	if actions != nil {
 		front.StateBlockPtr().Actions = actions
 	}
+	stampServer(front.StateBlockPtr())
 	return render.SuccessResult(front, body)
 }
 
@@ -56,6 +71,7 @@ func imageResult(front StateFront, actions []printerstate.ActionGate, body, mime
 	if actions != nil {
 		front.StateBlockPtr().Actions = actions
 	}
+	stampServer(front.StateBlockPtr())
 	doc := render.Document{Front: front, Body: body}
 	text, err := doc.String()
 	if err != nil {

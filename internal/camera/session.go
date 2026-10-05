@@ -31,16 +31,18 @@ const (
 const accessUnitBufferSize = 32
 
 // samplebuilderMaxLate bounds how many RTP packets samplebuilder buffers
-// while waiting for a sample to become complete (see its New docs). A
-// 1280x720 IDR access unit (the corrected root cause analysis,
-// dev_docs/camera-keyframe-rca.md) has been observed spanning roughly 6-8
-// FU-A fragments on its own; with the NACK generator below, recovering one
-// lost fragment costs one local LAN round trip (single-digit milliseconds),
-// but samplebuilder's window is measured in packet count, not time, so it
-// must stay wide enough that a run of P-frame packets arriving while a
-// retransmit is in flight cannot evict the still-incomplete IDR first. 100
-// keeps several full frames of headroom at the observed 15-20 fps.
-const samplebuilderMaxLate = 100
+// while waiting for a sample to become complete (see its New docs). It is
+// measured in packets, and samplebuilder force-purges its buffer once more
+// than this many are held, so a sample that spans more packets can never
+// complete, even with no loss at all. With the chamber light on the K2's
+// 1280x720 IDR spans 117-118 RTP packets (about 65 kB; unlit about 13), so the
+// old bound of 100 made a lit keyframe impossible to assemble
+// (dev_docs/field-camera-transport-analysis.md, field feedback item 3). 512
+// keeps more than 4x headroom over the largest observed IDR while bounding
+// how long one packet that NACK cannot repair stalls assembly. It is a
+// keyframe-size anti-break bound, not a tuning knob. The snapshot, live view
+// and recording paths share it through Session.
+const samplebuilderMaxLate = 512
 
 // pliRetryInterval is how often Session re-sends an RTCP PLI while it has
 // not yet delivered any complete keyframe (SPS+PPS+IDR) on a freshly opened
@@ -91,8 +93,9 @@ type EventLogger interface {
 	// complete keyframe access unit (SPS+PPS+IDR, in-band or reconstructed
 	// from cached parameter sets) is produced. waited is how long that took
 	// since Open returned control to negotiate the connection (roughly,
-	// time since the track started).
-	KeyframeReceived(host string, waited time.Duration)
+	// time since the track started); packets is how many RTP packets carried
+	// it (compare with samplebuilderMaxLate when a keyframe never arrives).
+	KeyframeReceived(host string, waited time.Duration, packets int)
 	// Error is called for a session-level failure or a noteworthy but
 	// non-fatal diagnostic (e.g. an IDR arriving with neither in-band nor
 	// cached SPS/PPS available yet, so it cannot be delivered as a usable
@@ -104,11 +107,11 @@ type EventLogger interface {
 // whenever Open is called without WithLogger.
 type noopEventLogger struct{}
 
-func (noopEventLogger) SessionOpened(string)                   {}
-func (noopEventLogger) SessionClosed(string, error)            {}
-func (noopEventLogger) KeyframeRequested(string)               {}
-func (noopEventLogger) KeyframeReceived(string, time.Duration) {}
-func (noopEventLogger) Error(string, error)                    {}
+func (noopEventLogger) SessionOpened(string)                        {}
+func (noopEventLogger) SessionClosed(string, error)                 {}
+func (noopEventLogger) KeyframeRequested(string)                    {}
+func (noopEventLogger) KeyframeReceived(string, time.Duration, int) {}
+func (noopEventLogger) Error(string, error)                         {}
 
 // Option configures Open. See WithLogger.
 type Option func(*sessionOptions)
@@ -502,6 +505,7 @@ func (s *Session) readTrack(ctx context.Context, track *webrtc.TrackRemote) {
 
 	depacketizer := &codecs.H264Packet{}
 	builder := samplebuilder.New(samplebuilderMaxLate, depacketizer, track.Codec().ClockRate)
+	var counts packetCounter
 
 	for {
 		pkt, _, err := track.ReadRTP()
@@ -509,13 +513,14 @@ func (s *Session) readTrack(ctx context.Context, track *webrtc.TrackRemote) {
 			return
 		}
 
+		counts.add(pkt.Timestamp)
 		builder.Push(pkt)
 		for {
 			sample := builder.Pop()
 			if sample == nil {
 				break
 			}
-			au := s.processSample(sample.Data, sample.PacketTimestamp)
+			au := s.processSample(sample.Data, sample.PacketTimestamp, counts.take(sample.PacketTimestamp))
 			select {
 			case s.aus <- au:
 			default:
@@ -529,6 +534,26 @@ func (s *Session) readTrack(ctx context.Context, track *webrtc.TrackRemote) {
 		default:
 		}
 	}
+}
+
+// packetCounter counts RTP packets per RTP timestamp (one timestamp is one
+// access unit), so a popped sample can report how many packets carried it.
+// Samples samplebuilder drops never pop, so their entries are cleared once the
+// map holds more timestamps than the builder could still be assembling.
+type packetCounter map[uint32]int
+
+func (c *packetCounter) add(ts uint32) {
+	if *c == nil || len(*c) > samplebuilderMaxLate {
+		*c = make(packetCounter)
+	}
+	(*c)[ts]++
+}
+
+// take returns the count for ts and forgets it.
+func (c *packetCounter) take(ts uint32) int {
+	n := (*c)[ts]
+	delete(*c, ts)
+	return n
 }
 
 // processSample turns one samplebuilder-assembled Annex-B sample into an
@@ -551,7 +576,7 @@ func (s *Session) readTrack(ctx context.Context, track *webrtc.TrackRemote) {
 // AccessUnit's own doc comment. Returning false here instead makes every
 // caller correctly keep waiting - which retryPLIUntilKeyframe backs up by
 // continuing to ask the printer for a fresh, hopefully complete IDR.
-func (s *Session) processSample(data []byte, rtpTimestamp uint32) AccessUnit {
+func (s *Session) processSample(data []byte, rtpTimestamp uint32, packets int) AccessUnit {
 	units := splitAnnexB(data)
 
 	hasIDR := false
@@ -617,7 +642,7 @@ func (s *Session) processSample(data []byte, rtpTimestamp uint32) AccessUnit {
 	if complete {
 		s.keyframeOnce.Do(func() {
 			close(s.keyframeCh)
-			s.logger.KeyframeReceived(s.host, time.Since(s.openedAt))
+			s.logger.KeyframeReceived(s.host, time.Since(s.openedAt), packets)
 		})
 	} else if hasIDR {
 		// A real IDR arrived, but this Session has never seen a usable

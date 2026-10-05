@@ -123,6 +123,14 @@ type StateBlock struct {
 	VerifiedHostname string `yaml:"verified_hostname,omitempty"`
 	Model            string `yaml:"model,omitempty"`
 
+	// ServerVersion and ServerPID identify the MCP server process that
+	// answered (field feedback item 4): after an update an AI client can keep
+	// talking to the old process until it is restarted, and comparing this
+	// with `creality-k2-mcp version` shows it. Set by internal/mcpserver;
+	// empty from the CLI and the TUI.
+	ServerVersion string `yaml:"server_version,omitempty"`
+	ServerPID     int    `yaml:"server_pid,omitempty"`
+
 	// Snapshot time.
 	SnapshotTime string `yaml:"snapshot_time"`
 

@@ -80,21 +80,12 @@ func (v *viewerServer) handleStream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	keyframe, ok := waitForKeyframe(ctx, ch, streamWaitForKeyframeTimeout)
 	if !ok {
-		// review backlog item 47, corrected by dev_docs/camera-keyframe-
-		// rca.md: an earlier claim that "the K2 pauses its camera stream
-		// while idle" was unsupported and has been withdrawn - a live
-		// proof-of-concept comparison found the camera transport can stay
-		// continuously active while a complete keyframe still never
-		// assembles, because one RTP packet lost inside an IDR (which spans
-		// many FU-A fragments) left that access unit stuck forever with
-		// nothing asking for a retransmit. internal/camera now registers a
-		// NACK generator/responder to fix that, but this timeout can still
-		// legitimately occur on a lossy or congested network, so a plain
-		// "unavailable" message would still mislead a caller into thinking
-		// something here is broken rather than a network condition.
-		http.Error(w, "unavailable (code unavailable): the printer's camera did not produce a complete keyframe "+
-			"within the wait budget; this is usually network packet loss on the camera stream, not the printer "+
-			"being unreachable; try again", http.StatusServiceUnavailable)
+		// review backlog item 47: a timeout here is a stream condition, not a
+		// broken server, so the message says what happened and claims no cause
+		// (the v0.3.1 field cause, a keyframe larger than the receive window,
+		// is fixed in internal/camera).
+		http.Error(w, "unavailable (code unavailable): "+(&camera.NoKeyframeError{Wait: streamWaitForKeyframeTimeout}).Error()+
+			"; "+camera.NoKeyframeCause+"; try again", http.StatusServiceUnavailable)
 		return
 	}
 

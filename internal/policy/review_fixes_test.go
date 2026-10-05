@@ -194,7 +194,7 @@ func TestStartRecord_AStaleSnapshotNeverWipesANewerRecord(t *testing.T) {
 	}
 	// A snapshot older than the record never clears it.
 	snap := printerstate.Snapshot{Taken: now.Add(-time.Minute), PrintStats: &moonraker.PrintStats{State: "printing"}}
-	if pl.activeStartRec(snap) == nil {
+	if pl.activeStartRec(snap, printerstate.Derived{}) == nil {
 		t.Fatal("a snapshot taken before the record cleared it")
 	}
 }

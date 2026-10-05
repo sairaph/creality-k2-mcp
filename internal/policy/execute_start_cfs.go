@@ -518,7 +518,7 @@ func (p *Policy) sendStartCFS(ctx context.Context, deps Deps, printer domain.Pri
 		locks.pl.setStartRec(nil)
 		result.Effect = "refused_map_mismatch"
 		result.Effects = append(result.Effects, fmt.Sprintf(
-			"the start frame was NOT sent: %s. Requested map: %s. The printer reports: %s. The colorMatch frame was sent, so the printer may keep the written map until the next start, and get_printer_status may then show preparing (a start window) because of that leftover map even though nothing is printing",
+			"the start frame was NOT sent: %s. Requested map: %s. The printer reports: %s. The colorMatch frame was sent, so the printer may keep the written map until the next start (a leftover map alone is not read as a print start)",
 			mismatch.reason, mismatch.requested, mismatch.actual))
 		restoreFlow(&result)
 	case errors.As(err, &ambiguous):

@@ -216,7 +216,7 @@ func TestSpeedPreset_BucketRefusals(t *testing.T) {
 	wantErr(t, err, CodeUnavailable, "not available")
 	// Preparing (the print-start self-test).
 	f3 := newFakePrinter()
-	f3.setSelfTest(40)
+	f3.cfs9999(func(c *fakeCFS) { c.withSelfTest = 40; c.deviceState = 1 }) // a live self-test
 	_, err = exec(p, f3, testPrinter(f3, "sp-prep"), ActionSetSpeedPreset, preset("standard"), "")
 	wantErr(t, err, CodeUnavailable, "not available")
 	if len(f.speedFramesSnapshot())+len(f2.speedFramesSnapshot())+len(f3.speedFramesSnapshot()) != 0 {

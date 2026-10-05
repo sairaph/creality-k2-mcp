@@ -436,7 +436,7 @@ func TestHub_Snapshot_WarmBufferDecodesWithoutPLI(t *testing.T) {
 	recvWithin(t, ch, time.Second)
 	waitFor(t, time.Second, func() bool { return goldenBufferLen(h.byKey["printer-snap-a"]) == 2 })
 
-	result, err := h.Snapshot(context.Background(), "printer-snap-a")
+	result, err := h.Snapshot(context.Background(), "printer-snap-a", 0)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -469,7 +469,7 @@ func TestHub_Snapshot_ColdStart_HubSendsNoPLIOfItsOwn(t *testing.T) {
 	opener.queue(sess)
 	h := NewHub(opener)
 
-	_, err := h.Snapshot(context.Background(), "printer-snap-b")
+	_, err := h.Snapshot(context.Background(), "printer-snap-b", 0)
 	if err == nil {
 		t.Fatal("Snapshot with no keyframe ever sent: want a timeout error, got nil")
 	}
@@ -575,7 +575,7 @@ func TestHub_Snapshot_KeepWarmExpiry_ClosesUpstream(t *testing.T) {
 		sess3.send(camera.AccessUnit{Data: fixture.aus[1], Keyframe: false, PTS: ptsAt(1), CapturedAt: now3.Add(time.Millisecond)})
 	}()
 
-	if _, err := h.Snapshot(context.Background(), "printer-warm"); err != nil {
+	if _, err := h.Snapshot(context.Background(), "printer-warm", 0); err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	if h.ActiveCount() != 1 {

@@ -145,6 +145,13 @@ func mergeInto(dst, src map[string]any) {
 	}
 }
 
+// StatusFromPush decodes a merged raw push map (the initial full push with
+// later deltas merged over it, as ReadStatus builds it) into a Status. It lets
+// other packages replay captured frames exactly as a live read decodes them.
+func StatusFromPush(raw map[string]any) Status {
+	return buildStatus(raw)
+}
+
 // buildStatus decodes the typed fields from a merged raw push map. Missing
 // or unparsable fields are left at their zero value rather than erroring, so
 // a partial capture still produces a usable Status.

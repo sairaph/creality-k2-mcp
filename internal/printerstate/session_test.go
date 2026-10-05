@@ -4,13 +4,16 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
 	"github.com/sairaph/creality-k2-mcp/internal/moonraker"
 )
 
 // Supervised session 2026-09-29: virtual_sdcard.bed_mesh_calibate_state stays
-// true for the whole print after the self-test levels the bed. A printing or
-// paused job must never derive calibrating from it (pause and cancel would be
-// refused), while an idle printer with the flag still counts as calibrating.
+// true for the whole print after the self-test levels the bed, and (field
+// feedback, 2026-10-05) after a screen levelling until the next reboot. It
+// behaves as "a mesh is loaded", so since v0.3.1 it never derives calibrating:
+// not for a printing or paused job (pause and cancel would be refused) and not
+// for an idle printer (it trapped one in calibrating).
 func TestBedMeshFlagDoesNotMakeARunningPrintCalibrating(t *testing.T) {
 	printing := syntheticIdle()
 	printing.PrintStats.State = "printing"
@@ -29,18 +32,38 @@ func TestBedMeshFlagDoesNotMakeARunningPrintCalibrating(t *testing.T) {
 	}
 	idle := syntheticIdle()
 	idle.VirtualSDCard.BedMeshCalibrateState = boolPtr(true)
-	if d := DeriveActivityState(idle, nil); d.State != StateCalibrating {
-		t.Fatalf("idle with the flag: %s, want calibrating (a real levelling)", d.State)
+	if d := DeriveActivityState(idle, nil); d.State != StateIdle {
+		t.Fatalf("idle with the flag: %s, want idle (a loaded mesh, not a levelling)", d.State)
+	}
+	// Real levelling motion is still busy: idle_timeout Printing is busy_command.
+	idle.IdleTimeout.State = strPtr("Printing")
+	if d := DeriveActivityState(idle, nil); d.Bucket != BucketB {
+		t.Fatalf("flag with motion: %s/%s, want bucket B", d.State, d.Bucket)
 	}
 }
 
 func TestStartWindowSignalsFromNineNineNineNineState(t *testing.T) {
-	for _, st := range []int{9, 1, 7} {
-		s := syntheticIdle()
-		s.WS9999.State = present(st)
-		d := DeriveActivityState(s, nil)
-		if d.State != StatePreparing || d.Bucket != BucketPP || !d.StartWindow {
-			t.Errorf("state %d with print_stats standby: %s/%s window %v, want the start window", st, d.State, d.Bucket, d.StartWindow)
+	// State 9, 1 or 7 with deviceState 1 (or absent) is a start or its stop, over
+	// standby or the previous job's complete or cancelled (v0.3.1 R1).
+	for _, prev := range []string{"standby", "complete", "cancelled"} {
+		for _, st := range []int{9, 1, 7} {
+			for _, ds := range []crealityws.Int{present(1), {}} {
+				s := syntheticIdle()
+				s.PrintStats.State = prev
+				s.WS9999.State = present(st)
+				s.WS9999.DeviceState = ds
+				d := DeriveActivityState(s, nil)
+				if d.State != StatePreparing || d.Bucket != BucketPP || !d.StartWindow {
+					t.Errorf("%s, state %d, deviceState %+v: %s/%s window %v, want the start window", prev, st, ds, d.State, d.Bucket, d.StartWindow)
+				}
+			}
+			// deviceState 0 vetoes: a lingering state value at rest is not a start.
+			s := syntheticIdle()
+			s.PrintStats.State = prev
+			s.WS9999.State = present(st)
+			if d := DeriveActivityState(s, nil); d.StartWindow || d.Bucket != BucketI {
+				t.Errorf("%s, state %d, deviceState 0: %s/%s window %v, want bucket I", prev, st, d.State, d.Bucket, d.StartWindow)
+			}
 		}
 	}
 	// State 4 (aborted) persists at rest and 0 is idle: neither is ever busy.
@@ -51,28 +74,15 @@ func TestStartWindowSignalsFromNineNineNineNineState(t *testing.T) {
 			t.Errorf("state %d: %s window %v, want idle", st, d.State, d.StartWindow)
 		}
 	}
-	// State 1 while printing is just printing; the row is standby-only.
+	// State 1 while printing is just printing.
 	s := syntheticIdle()
 	s.WS9999.State = present(1)
+	s.WS9999.DeviceState = present(1)
 	s.PrintStats.State = "printing"
 	s.PrintStats.PrintDuration = 5
 	s.VirtualSDCard.IsActive = boolPtr(true)
 	if d := DeriveActivityState(s, nil); d.State != StatePrinting {
 		t.Errorf("printing with state 1: %s", d.State)
-	}
-	// A stale complete or cancelled with 9999 state 1, 7 or 9 is NOT the window:
-	// what 9999 reads after a natural completion or a Moonraker cancel was never
-	// captured, and a lingering value must not make an idle printer "preparing".
-	for _, prev := range []string{"complete", "cancelled"} {
-		for _, st := range []int{1, 7, 9} {
-			s = syntheticIdle()
-			s.PrintStats.State = prev
-			s.WS9999.State = present(st)
-			d := DeriveActivityState(s, nil)
-			if d.State == StatePreparing || d.StartWindow || d.Bucket != BucketI {
-				t.Errorf("%s with 9999 state %d: %s/%s window %v, want bucket I", prev, st, d.State, d.Bucket, d.StartWindow)
-			}
-		}
 	}
 }
 
@@ -164,6 +174,7 @@ func TestStartWindowWinsOverTheSelfTestsOwnMotion(t *testing.T) {
 		s := syntheticIdle()
 		s.PrintStats.State = prev
 		s.WS9999.WithSelfTest = present(40)
+		s.WS9999.DeviceState = present(1)
 		return s
 	}
 	for _, prev := range []string{"complete", "standby", "cancelled"} {
@@ -177,15 +188,16 @@ func TestStartWindowWinsOverTheSelfTestsOwnMotion(t *testing.T) {
 			t.Errorf("the reason does not name the motion: %v", d.Reasons)
 		}
 		cal := selfTest(prev)
-		cal.VirtualSDCard.BedMeshCalibrateState = boolPtr(true)
+		cal.CustomMacro.LevelingCalibration = intPtr(1)
 		d = DeriveActivityState(cal, nil)
 		if d.State != StatePreparing || d.Bucket != BucketPP || !d.StartWindow || !containsSub(d.Reasons, "self-test calibrating") {
 			t.Fatalf("%s + self-test + calibrating: %s/%s window %v %v", prev, d.State, d.Bucket, d.StartWindow, d.Reasons)
 		}
 	}
-	// The signal can also be the 9999 state (standby) or a non-identity map.
+	// The signal can also be the 9999 state (standby).
 	s := syntheticIdle()
 	s.WS9999.State = present(1)
+	s.WS9999.DeviceState = present(1)
 	s.MotorControl.IsHoming = boolPtr(true)
 	if d := DeriveActivityState(s, nil); d.State != StatePreparing || !d.StartWindow {
 		t.Fatalf("standby + 9999 state 1 + homing: %s", d.State)
@@ -201,7 +213,7 @@ func TestHomingAndCalibratingOutsideAStartWindowAreUnchanged(t *testing.T) {
 		t.Errorf("idle + homing: %s/%s window %v, want homing/B", d.State, d.Bucket, d.StartWindow)
 	}
 	cal := syntheticIdle()
-	cal.VirtualSDCard.BedMeshCalibrateState = boolPtr(true)
+	cal.CustomMacro.LevelingCalibration = intPtr(1)
 	if d := DeriveActivityState(cal, nil); d.State != StateCalibrating || d.StartWindow {
 		t.Errorf("idle + calibrating: %s window %v", d.State, d.StartWindow)
 	}
