@@ -109,6 +109,12 @@ Diagnoses the installation. Runs, in order:
 
 - **Executable** and **PATH** checks (is the binary where it should be, is
   its directory on `PATH`).
+- **Version** - this binary's version. Tool replies that carry the printer
+  state, and `list_printers`, name the server process that answered
+  (`server_version`, `server_pid`); if that version differs, the AI client
+  is still running an older server process: restart the AI client (or its
+  MCP connection). Never kill the server process itself: in the field the
+  Codex client did not start it again, and other clients may not either.
 - **AI clients** - which clients currently have this server registered.
 - **Update** - whether a newer release is available (skipped for a
   from-source `dev` build).
@@ -277,8 +283,8 @@ The CLI runs in its own process, so it derives state from the printer's signals
 alone. The MCP server additionally remembers, in memory, a print start it sent
 itself, so during the first moments of a start (before the printer shows any
 self-test signal) the server reports `preparing` where this command may still show
-`idle`. Once the printer shows its self-test progress or its filament map the two
-agree.
+`idle`. Once the printer shows the start (9999 state 9 or 1 with deviceState 1, or
+the self-test running while the printer is busy) the two agree.
 
 ### `creality-k2-mcp filaments [printer] [--json]`
 

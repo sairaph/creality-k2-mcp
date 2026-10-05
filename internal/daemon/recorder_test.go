@@ -248,7 +248,7 @@ func (h *fakeRecorderHub) send(host string, au camera.AccessUnit) {
 // Nothing else may read from this same channel while a Snapshot call is in
 // flight (runTimelapse, since review backlog item 51, no longer drains the
 // subscription channel itself for exactly this reason).
-func (h *fakeRecorderHub) Snapshot(ctx context.Context, host string) (*camera.SnapshotResult, error) {
+func (h *fakeRecorderHub) Snapshot(ctx context.Context, host string, _ time.Duration) (*camera.SnapshotResult, error) {
 	if err := h.RequestKeyframe(host); err != nil {
 		return nil, err
 	}

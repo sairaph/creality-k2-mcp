@@ -19,7 +19,10 @@ carries a frontmatter block with the printer's current derived state
 (activity state, bucket, gating class, reasons, temperatures, job identity,
 and more, see [safety.md](safety.md)) so the caller always sees fresh
 context alongside the answer to its specific question, plus a Markdown body
-explaining what happened and the exact next call.
+explaining what happened and the exact next call. That block, and
+`list_printers`, also name the server process that answered (`server_version`,
+`server_pid`): after an update, a different version there means the AI client
+is still running the old process and must be restarted.
 
 ## Tool presets and per-printer control
 
@@ -130,7 +133,10 @@ Category: monitor, read-only.
 - The current job's file, rich slicer metadata, progress, current layer,
   elapsed time, ETA, and the `exclude_object` list of printable objects with
   which are already excluded. With no job running, reports the last
-  completed or cancelled job's summary instead of an error.
+  completed or cancelled job's summary instead of an error. Object names are
+  shown as the printer reports them (upper case, for example `RSA_ID_32_COPY_0`);
+  a slicer may list the same objects in lower case. `exclude_object` matches
+  names case-insensitively, so either spelling works.
 
 ### `list_job_history`
 
@@ -584,7 +590,8 @@ is idle within about a minute.
 ### `exclude_object`
 
 - **Parameters:** `printer` (optional), `object_name` (required, matched
-  case-insensitively against `get_current_job`'s object list),
+  case-insensitively against `get_current_job`'s object list, so the
+  printer's upper-case names and a slicer's lower-case names both match),
   `confirm_token` (optional).
 - **State requirements:** printing or paused; refused if the object is
   already excluded or is the last remaining non-excluded object.

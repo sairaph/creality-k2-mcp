@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -174,7 +175,12 @@ func (c *cfsWS) ReadStatus(ctx context.Context) (crealityws.Status, error) {
 	if c.w.connected {
 		cfs = 1
 	}
-	return crealityws.Status{State: p(state), DeviceState: p(0), FeedState: p(0), UpgradeStatus: p(0), RepoPlrStatus: p(0),
+	// Like the real printer: deviceState 1 while a start or its stop runs.
+	device := 0
+	if state == 1 || state == 7 {
+		device = 1
+	}
+	return crealityws.Status{State: p(state), DeviceState: p(device), FeedState: p(0), UpgradeStatus: p(0), RepoPlrStatus: p(0),
 		MaterialStatus: p(0), CfsConnect: p(cfs), Err: crealityws.StatusErr{Present: true}, WithSelfTest: p(100)}, nil
 }
 
@@ -762,7 +768,7 @@ func TestGetFilaments_EditableFollowsThePrinterState(t *testing.T) {
 func TestGetFilaments_BusyCFSBlocksEditsAndSaysWhich(t *testing.T) {
 	cs, w, _ := cfsSetup(t, true)
 	w.mu.Lock()
-	w.boxMap["T1A"] = "T1B" // a start in flight: non-identity map, the start window
+	w.state = 1 // a start in flight (another client's): 9999 state 1, the start window
 	w.mu.Unlock()
 	text := replyText(call(t, cs, "get_filaments", nil))
 	if !strings.Contains(text, "editable: false") || !strings.Contains(text, "not available in state") {
@@ -954,5 +960,19 @@ func TestControlBodyForStoppingAndResuming(t *testing.T) {
 	res := controlBody(policy.Result{Action: policy.ActionResumePrint, Printer: printer, Accepted: true, Effect: "resuming", Effects: []string{"resuming: the printer reheats to 250 C"}})
 	if !strings.Contains(res, "is resuming") || !strings.Contains(res, "not printing yet") || !strings.Contains(res, "cancel_print is still available") || !strings.Contains(res, "250 C") {
 		t.Errorf("resuming body: %s", res)
+	}
+}
+
+// Field feedback item 4 (plan-v0.3.1.md R8): every printer-state reply and
+// list_printers name the server process that answered, so a stale process
+// left running after an update is visible.
+func TestReplies_NameTheServerVersionAndPID(t *testing.T) {
+	cs, _, _ := cfsSetup(t, true)
+	pid := fmt.Sprintf("server_pid: %d", os.Getpid())
+	for _, tool := range []string{"get_printer_status", "list_printers"} {
+		text := replyText(call(t, cs, tool, nil))
+		if !strings.Contains(text, "server_version: test") || !strings.Contains(text, pid) {
+			t.Errorf("%s does not name the server:\n%s", tool, text)
+		}
 	}
 }

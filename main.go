@@ -446,6 +446,7 @@ func newDoctor(ctx context.Context) *doctor.Runner {
 	r := doctor.New(
 		doctor.ExecutableCheck{},
 		doctor.PathCheck{Dir: opts.InstallDir},
+		versionCheck{},
 		clientsCheck{},
 	)
 	if version != "dev" {
@@ -464,6 +465,21 @@ func newDoctor(ctx context.Context) *doctor.Runner {
 
 func runDoctor(ctx context.Context) int {
 	return newDoctor(ctx).Run(ctx, os.Stdout)
+}
+
+// versionCheck reports this binary's version and how to spot an AI client
+// still running an older server process after an update (field feedback
+// item 4): tool replies that carry the printer state, and list_printers, name
+// the process that answered in their server_version and server_pid fields.
+type versionCheck struct{}
+
+func (versionCheck) Name() string { return "Version" }
+
+func (versionCheck) Run(context.Context) doctor.Result {
+	return doctor.Result{Name: "Version", Status: doctor.OK, Detail: fmt.Sprintf(
+		"%s %s. An AI client keeps the server process it started: if server_version in a tool reply "+
+			"differs from this, restart the AI client (or its MCP connection). Never kill the server process "+
+			"itself: a client may not start it again.", domain.BinaryName, version)}
 }
 
 // clientsCheck lists the AI clients that have this server registered.

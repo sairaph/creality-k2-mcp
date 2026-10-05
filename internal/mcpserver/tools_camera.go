@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -88,10 +89,11 @@ const (
 // concurrently (see getCameraSnapshotHandler) and together must complete
 // within this long, so a slow or stuck printer cannot hang the tool call
 // indefinitely. 25s, not a shorter value: the capture itself goes through
-// the daemon's Hub.Snapshot (review backlog item 51), which has its own 20s
-// hubSnapshotBudget for a cold connection, and live testing against a real
+// the daemon's Hub.Snapshot (review backlog item 51), which waits at most
+// daemon.MaxSnapshotBudget (20s) or this call's remaining time less the
+// client's reply margin, whichever is shorter, and live testing against a real
 // K2 observed cold-connect latency up to 16s, so this tool budget must
-// leave that inner budget room to complete (dev_docs/t11e-soak-report.md,
+// leave that inner wait room to complete (dev_docs/t11e-soak-report.md,
 // dev_docs/camera-keyframe-rca.md). It is a var, not a const, only so a
 // test can shrink it temporarily instead of actually waiting 25 seconds.
 var snapshotToolBudget = 25 * time.Second
@@ -195,9 +197,14 @@ func getCameraSnapshotHandler(s *Server) func(context.Context, *mcp.CallToolRequ
 		outcome := <-captureCh
 		if outcome.err != nil {
 			if isNoVideoTimeout(outcome.err) {
+				wait := snapshotToolBudget
+				var nk *camera.NoKeyframeError
+				if errors.As(outcome.err, &nk) {
+					wait = nk.Wait
+				}
 				return render.ErrorResult(render.Error{
 					Code:    render.CodeUnavailable,
-					Message: fmt.Sprintf("Could not capture a camera snapshot from %s: %s.", block.PrinterName, noVideoMessage),
+					Message: fmt.Sprintf("Could not capture a camera snapshot from %s: %s; try again.", block.PrinterName, noVideoMessage(wait)),
 					Hint:    noVideoHint,
 				}), nil, nil
 			}

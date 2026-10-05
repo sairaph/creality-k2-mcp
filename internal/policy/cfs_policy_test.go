@@ -414,7 +414,7 @@ func TestStartWindow_UploadAndDeleteRefuseTheInFlightFile(t *testing.T) {
 func TestStartWindow_SignalOnlyRefusesUploadOverAndDelete(t *testing.T) {
 	f, p, printer := cfsSetup(t, "window-signal")
 	f.addFile("x.gcode")
-	f.setSelfTest(40)
+	f.cfs9999(func(c *fakeCFS) { c.withSelfTest = 40; c.deviceState = 1 }) // a live self-test: progress with deviceState 1
 	_, err := exec(p, f, printer, ActionDeleteGCodeFile, Params{Filename: "x.gcode"}, "")
 	wantErr(t, err, CodeConflict, "self-test")
 	_, err = exec(p, f, printer, ActionUploadGCodeFile, Params{Filename: "y.gcode", LocalPath: "x"}, "")
@@ -566,17 +566,17 @@ func TestStartRecord_ClearedByStateThreeOrFourAfterTheFrameAndGrace(t *testing.T
 		snap := printerstate.Snapshot{Taken: now.Add(10 * time.Second)}
 		snap.WS9999.State = crealityws.Int{Value: st, Present: true}
 
-		if pl.activeStartRec(snap) == nil {
+		if pl.activeStartRec(snap, printerstate.Derived{}) == nil {
 			t.Fatalf("state %d: cleared before the frame was sent (a stale value from an earlier stop)", st)
 		}
 		pl.markStartSent()
 		rec.sentAt = now // the frame went out at the start
 		snap.Taken = now.Add(startStateGrace / 2)
-		if pl.activeStartRec(snap) == nil {
+		if pl.activeStartRec(snap, printerstate.Derived{}) == nil {
 			t.Fatalf("state %d: cleared inside the grace period", st)
 		}
 		snap.Taken = now.Add(startStateGrace + time.Second)
-		if pl.activeStartRec(snap) != nil || pl.getStartRec() != nil {
+		if pl.activeStartRec(snap, printerstate.Derived{}) != nil || pl.getStartRec() != nil {
 			t.Fatalf("state %d: not cleared after the grace period", st)
 		}
 	}
@@ -587,7 +587,7 @@ func TestStartRecord_ClearedByStateThreeOrFourAfterTheFrameAndGrace(t *testing.T
 		pl.setStartRec(rec)
 		snap := printerstate.Snapshot{Taken: now.Add(startStateGrace + time.Minute)}
 		snap.WS9999.State = crealityws.Int{Value: st, Present: true}
-		if pl.activeStartRec(snap) == nil {
+		if pl.activeStartRec(snap, printerstate.Derived{}) == nil {
 			t.Fatalf("state %d cleared the record", st)
 		}
 	}

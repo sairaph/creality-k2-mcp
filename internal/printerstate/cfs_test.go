@@ -260,14 +260,16 @@ func TestSignalFedFilamentOperation(t *testing.T) {
 			t.Fatalf("state/bucket = %s/%s, want preparing/PP", d.State, d.Bucket)
 		}
 	})
+	// v0.3.1 R3: the signal row sits before cancelled and complete, so a load on
+	// the printer screen after a finished or cancelled print is reported as one.
 	for _, ps := range []string{"cancelled", "complete"} {
-		t.Run(ps+" with feeding stays bucket I with CFSQuiescent false", func(t *testing.T) {
+		t.Run(ps+" with feeding is filament_operation", func(t *testing.T) {
 			s := standbyFeeding(t)
 			s.PrintStats.State = ps
 			s.VirtualSDCard.IsActive = boolPtr(false)
 			d := DeriveActivityState(s, nil)
-			if d.Bucket != BucketI || d.State != ps {
-				t.Fatalf("state/bucket = %s/%s, want %s/I", d.State, d.Bucket, ps)
+			if d.Bucket != BucketU || d.State != StateFilamentOperation {
+				t.Fatalf("state/bucket = %s/%s, want filament_operation/U", d.State, d.Bucket)
 			}
 			if d.CFSQuiescent || !d.CFSKnown || d.CFSError {
 				t.Fatalf("flags = known %v quiescent %v error %v, want true/false/false", d.CFSKnown, d.CFSQuiescent, d.CFSError)
@@ -299,46 +301,64 @@ func TestSignalFedFilamentOperation(t *testing.T) {
 	})
 }
 
-// --- start window (plan 8a.1, signal row) ---
+// --- start window (plan 8a.1, signal row; v0.3.1 R1: live evidence only) ---
 
 func TestStartWindowSignalRow(t *testing.T) {
-	t.Run("standby plus withSelfTest not 100 is preparing PP", func(t *testing.T) {
-		s := cfsIdle(t)
-		s.WS9999.WithSelfTest = present(40)
-		d := DeriveActivityState(s, nil)
-		if d.State != StatePreparing || d.Bucket != BucketPP || d.Class != ClassBusy {
-			t.Fatalf("state/bucket/class = %s/%s/%s, want preparing/PP/busy", d.State, d.Bucket, d.Class)
+	t.Run("withSelfTest not 100 with live activity is preparing PP", func(t *testing.T) {
+		activity := map[string]func(s *Snapshot){
+			"deviceState 1":            func(s *Snapshot) { s.WS9999.DeviceState = present(1) },
+			"idle_timeout Printing":    func(s *Snapshot) { s.IdleTimeout.State = strPtr("Printing") },
+			"state 9 with deviceState": func(s *Snapshot) { s.WS9999.State = present(9); s.WS9999.DeviceState = present(5) },
 		}
-		if !hasReason(d.Reasons, "withSelfTest is 40") {
-			t.Fatalf("reasons %v do not name the signal", d.Reasons)
+		for name, set := range activity {
+			s := cfsIdle(t)
+			s.WS9999.WithSelfTest = present(40)
+			set(&s)
+			d := DeriveActivityState(s, nil)
+			if d.State != StatePreparing || d.Bucket != BucketPP || d.Class != ClassBusy || !d.StartWindow {
+				t.Errorf("%s: %s/%s/%s window %v, want preparing/PP/busy", name, d.State, d.Bucket, d.Class, d.StartWindow)
+			}
+			if !hasReason(d.Reasons, "withSelfTest is 40") {
+				t.Errorf("%s: reasons %v do not name the signal", name, d.Reasons)
+			}
+		}
+	})
+	t.Run("withSelfTest not 100 at rest is not a signal (stale after a power cycle)", func(t *testing.T) {
+		for _, v := range []int{0, 40} {
+			s := cfsIdle(t)
+			s.WS9999.WithSelfTest = present(v)
+			withTargets(&s, 0, 0)
+			if d := DeriveActivityState(s, nil); d.State != StateIdle || d.StartWindow {
+				t.Errorf("withSelfTest %d at rest: %s window %v, want idle", v, d.State, d.StartWindow)
+			}
 		}
 	})
 	t.Run("also without a CFS connected", func(t *testing.T) {
 		s := syntheticIdle()
 		s.WS9999.WithSelfTest = present(0)
+		s.WS9999.DeviceState = present(1)
 		if d := DeriveActivityState(s, nil); d.State != StatePreparing || d.Bucket != BucketPP {
 			t.Fatalf("state/bucket = %s/%s, want preparing/PP", d.State, d.Bucket)
 		}
 	})
 	t.Run("withSelfTest 100 or absent is not a signal", func(t *testing.T) {
 		s := cfsIdle(t)
-		if d := DeriveActivityState(s, nil); d.State != StateIdle {
-			t.Fatalf("withSelfTest 100: state = %s, want idle", d.State)
+		s.WS9999.DeviceState = present(1)
+		if d := DeriveActivityState(s, nil); d.StartWindow {
+			t.Fatalf("withSelfTest 100: state = %s, want no window", d.State)
 		}
 		s.WS9999.WithSelfTest = crealityws.Int{}
-		if d := DeriveActivityState(s, nil); d.State != StateIdle {
-			t.Fatalf("withSelfTest absent: state = %s, want idle", d.State)
+		if d := DeriveActivityState(s, nil); d.StartWindow {
+			t.Fatalf("withSelfTest absent: state = %s, want no window", d.State)
 		}
 	})
-	t.Run("non-identity box.map is preparing PP", func(t *testing.T) {
+	t.Run("9999 unreachable is not a signal", func(t *testing.T) {
 		s := cfsIdle(t)
-		s.Box.Map["T1B"] = "T1C"
-		d := DeriveActivityState(s, nil)
-		if d.State != StatePreparing || d.Bucket != BucketPP {
-			t.Fatalf("state/bucket = %s/%s, want preparing/PP", d.State, d.Bucket)
-		}
-		if !hasReason(d.Reasons, "T1B -> T1C") {
-			t.Fatalf("reasons %v do not name the differing map entry", d.Reasons)
+		s.WS9999.State = present(1)
+		s.WS9999.DeviceState = present(1)
+		s.WS9999Reachable = false
+		if d := DeriveActivityState(s, nil); d.StartWindow {
+			t.Fatalf("unreachable 9999: %s window", d.State)
 		}
 	})
 	t.Run("identity map is not a signal", func(t *testing.T) {
@@ -348,13 +368,13 @@ func TestStartWindowSignalRow(t *testing.T) {
 	})
 	t.Run("evaluated before busy_command", func(t *testing.T) {
 		s := cfsIdle(t)
-		s.Box.Map["T1A"] = "T1B"
+		s.WS9999.WithSelfTest = present(10)
 		s.IdleTimeout.State = strPtr("Printing")
 		if d := DeriveActivityState(s, nil); d.State != StatePreparing {
 			t.Fatalf("state = %s, want preparing ahead of busy_command", d.State)
 		}
 	})
-	t.Run("never shadows printing, paused, cancelled or complete", func(t *testing.T) {
+	t.Run("never shadows printing or paused", func(t *testing.T) {
 		cases := []struct {
 			name  string
 			setup func(s *Snapshot)
@@ -373,10 +393,12 @@ func TestStartWindowSignalRow(t *testing.T) {
 		for _, tc := range cases {
 			s := cfsIdle(t)
 			s.WS9999.WithSelfTest = present(40)
+			s.WS9999.State = present(1)
+			s.WS9999.DeviceState = present(1)
 			s.Box.Map["T1B"] = "T1C"
 			tc.setup(&s)
 			if d := DeriveActivityState(s, nil); d.State != tc.state {
-				t.Errorf("%s with both signals: state = %s, want %s", tc.name, d.State, tc.state)
+				t.Errorf("%s with every signal: state = %s, want %s", tc.name, d.State, tc.state)
 			}
 		}
 	})
@@ -386,8 +408,9 @@ func TestStartWindowSignalRow(t *testing.T) {
 	t.Run("stale complete or cancelled with a signal is the start window", func(t *testing.T) {
 		for _, prev := range []string{"complete", "cancelled"} {
 			for name, signal := range map[string]func(s *Snapshot){
-				"withSelfTest 50":  func(s *Snapshot) { s.WS9999.WithSelfTest = present(50) },
-				"non-identity map": func(s *Snapshot) { s.Box.Map["T1A"] = "T1D" },
+				"state 1 with deviceState 1":      func(s *Snapshot) { s.WS9999.State = present(1); s.WS9999.DeviceState = present(1) },
+				"withSelfTest 50 while moving":    func(s *Snapshot) { s.WS9999.WithSelfTest = present(50); s.IdleTimeout.State = strPtr("Printing") },
+				"state 9 with deviceState absent": func(s *Snapshot) { s.WS9999.State = present(9); s.WS9999.DeviceState = crealityws.Int{} },
 			} {
 				s := cfsIdle(t)
 				s.PrintStats.State = prev
@@ -396,10 +419,17 @@ func TestStartWindowSignalRow(t *testing.T) {
 				if d.State != StatePreparing || d.Bucket != BucketPP || !d.StartWindow {
 					t.Errorf("%s + %s: %s/%s window %v, want preparing/PP/true", prev, name, d.State, d.Bucket, d.StartWindow)
 				}
-				s = cfsIdle(t)
+			}
+			for name, stale := range map[string]func(s *Snapshot){
+				"withSelfTest 50 alone": func(s *Snapshot) { s.WS9999.WithSelfTest = present(50) },
+				"non-identity map":      func(s *Snapshot) { s.Box.Map["T1A"] = "T1D" },
+				"nothing":               func(s *Snapshot) {},
+			} {
+				s := cfsIdle(t)
 				s.PrintStats.State = prev
+				stale(&s)
 				if d := DeriveActivityState(s, nil); d.Bucket != BucketI || d.StartWindow {
-					t.Errorf("%s without a signal: %s/%s window %v, want bucket I", prev, d.State, d.Bucket, d.StartWindow)
+					t.Errorf("%s + %s: %s/%s window %v, want bucket I", prev, name, d.State, d.Bucket, d.StartWindow)
 				}
 			}
 		}
@@ -483,10 +513,9 @@ func TestBuildStateBlock_CFSBlockOnlyWhenConnected(t *testing.T) {
 	}
 }
 
-// A non-identity map on its own is a stale-able signal (an aborted print may leave
-// it): it may still say "preparing" for an idle printer, but a genuine homing or
-// calibration must not be relabelled as the self-test's own. A live signal (the
-// self-test progress) does.
+// A non-identity map on its own is a stale-able signal (an aborted print may
+// leave it): since v0.3.1 it never creates a start window, and a genuine homing
+// or calibration is never relabelled as the self-test's own. A live signal does.
 func TestStartWindowOverMotionNeedsALiveSignal(t *testing.T) {
 	staleMap := func() Snapshot {
 		s := cfsIdle(t)
@@ -500,17 +529,18 @@ func TestStartWindowOverMotionNeedsALiveSignal(t *testing.T) {
 		t.Fatalf("stale map + homing: %s/%s window %v, want a genuine homing", d.State, d.Bucket, d.StartWindow)
 	}
 	cal := staleMap()
-	cal.VirtualSDCard.BedMeshCalibrateState = boolPtr(true)
+	cal.CustomMacro.LevelingCalibration = intPtr(1)
 	if d := DeriveActivityState(cal, nil); d.State != StateCalibrating || d.StartWindow {
 		t.Fatalf("stale map + calibrating: %s window %v", d.State, d.StartWindow)
 	}
-	// The map alone (no motion) still derives preparing, as before.
-	if d := DeriveActivityState(staleMap(), nil); d.State != StatePreparing {
-		t.Fatalf("stale map alone: %s, want preparing as before", d.State)
+	// The map alone (no motion) is the previous job's complete.
+	if d := DeriveActivityState(staleMap(), nil); d.State != StateComplete || d.StartWindow {
+		t.Fatalf("stale map alone: %s window %v, want complete", d.State, d.StartWindow)
 	}
-	// With the live self-test progress it is the window, naming the motion.
+	// With a live self-test it is the window, naming the motion.
 	live := staleMap()
 	live.WS9999.WithSelfTest = crealityws.Int{Value: 40, Present: true}
+	live.WS9999.DeviceState = present(1)
 	live.MotorControl.IsHoming = boolPtr(true)
 	d := DeriveActivityState(live, nil)
 	if d.State != StatePreparing || !d.StartWindow || !hasReason(d.Reasons, "self-test homing") {

@@ -327,7 +327,8 @@ func statusGuidance(block printerstate.StateBlock) string {
 				"standby, before it starts printing). Every write is refused during it except set_light and uploading or " +
 				"deleting files other than the one being started. cancel_print is available and sends Creality's own stop " +
 				"(Moonraker's cancel does not stop the self-test): the printer finishes its current self-test step (about 20 s), " +
-				"turns the heaters off and returns to idle within about a minute. Call get_printer_status again shortly to follow it."
+				"turns the heaters off and returns to idle within about a minute. Call get_printer_status again shortly to follow it. " +
+				policy.StartWindowWayOut + "."
 		} else {
 			body = "The printer is running START_PRINT's own prepare/heat/home sequence for a job that is about " +
 				"to begin printing. Writes are blocked except set_light and cancel_print (call cancel_print once with no " +
@@ -800,7 +801,7 @@ func cfsGuidance(block printerstate.StateBlock) string {
 	case printerstate.CFSStateBusy:
 		b.WriteString(" The CFS is busy (feeding, loading or otherwise not at rest), so CFS-dependent writes are refused until it settles: call get_printer_status again shortly." + reasonsText(reasons))
 	case printerstate.CFSStateError:
-		b.WriteString(" The CFS reports an error (a runout, a jam or an error code). Clear it on the printer screen or in Creality Print; this server has no tool for it. While a print is running, pause_print and cancel_print are not blocked by it." + reasonsText(reasons))
+		b.WriteString(" The CFS reports an error signal (see the reasons). This server has no tool to clear it: act on the printer screen or in Creality Print, then call get_printer_status again. While a print is running, pause_print and cancel_print are not blocked by it." + reasonsText(reasons))
 	default:
 		b.WriteString(" The CFS could not be fully read (port 9999 unreachable or a field missing), so CFS-dependent writes are refused (fail closed) until it can be." + reasonsText(reasons))
 	}

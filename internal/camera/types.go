@@ -5,7 +5,10 @@
 // the protocol this package implements against.
 package camera
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // AccessUnit is one H.264 access unit (typically one video frame) as an
 // Annex-B byte stream: one or more NAL units, each prefixed with a start
@@ -40,3 +43,33 @@ type CodecInfo struct {
 	Width          int
 	Height         int
 }
+
+// NoKeyframeText is the fixed part of NoKeyframeError's message. The daemon's
+// errors cross its socket as plain text, so a client recognises this failure
+// by it.
+const NoKeyframeText = "the camera stream did not deliver a complete keyframe"
+
+// NoKeyframeError is a snapshot that ran out of time before the camera
+// stream delivered a complete keyframe. Wait is how long was waited. It
+// matches context.DeadlineExceeded under errors.Is, because it is that
+// deadline, expired.
+type NoKeyframeError struct {
+	Wait time.Duration
+}
+
+func (e *NoKeyframeError) Error() string {
+	if e.Wait <= 0 {
+		return NoKeyframeText
+	}
+	return NoKeyframeText + " within " + e.Wait.Round(time.Second).String()
+}
+
+// Is reports whether target is context.DeadlineExceeded.
+func (e *NoKeyframeError) Is(target error) bool {
+	return target == context.DeadlineExceeded
+}
+
+// NoKeyframeCause is what is known about the cause of a NoKeyframeError, for
+// every message that reports one: the field cause (a keyframe larger than the
+// receive window) is fixed, and no other cause has been observed.
+const NoKeyframeCause = "the cause is not known to this server"

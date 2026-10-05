@@ -25,7 +25,7 @@ a snapshot can usually be served from data already in memory rather than
 waiting for a fresh keyframe. The connection is kept open for 60 seconds
 after the last consumer leaves (the keep-warm window) so a second snapshot
 or viewer request shortly after the first does not pay the cost of
-reconnecting.
+reconnecting. A snapshot that failed does not start the keep-warm window.
 
 ## Snapshot
 
@@ -37,9 +37,11 @@ one takes longer. Live measurements against a real K2 (dev_docs/
 item51-stream-snapshots.md) found roughly 2.3 seconds for a cold connection
 and 1.7-2.0 seconds for a warm one (repeated snapshots within the keep-warm
 window), with occasional outliers when the connection needs to recover from
-a lost keyframe. The whole snapshot tool call is bounded to 20 seconds inside
-the daemon (`hubSnapshotBudget`) within a 25 second budget for the MCP tool
-itself.
+a lost keyframe. One deadline covers the whole call: the MCP tool allows 25
+seconds, and the daemon waits at most 20 seconds for a keyframe, or less when
+the caller has less time left (it keeps 2 seconds for the reply). The call is
+retried only when the daemon could not be reached at all (after starting it);
+a request the daemon received is never sent twice.
 
 The MCP tool re-encodes the capture as JPEG and, if it is still over the
 result's byte budget, downscales and lowers quality in steps until it fits
@@ -139,7 +141,7 @@ than giving up.
 | Golden buffer size (per printer, in the daemon) | 8 MiB |
 | Golden buffer span (per printer, in the daemon) | 10 seconds |
 | Connection keep-warm window after the last consumer leaves | 60 seconds |
-| Snapshot wait budget inside the daemon | 20 seconds |
+| Snapshot wait budget inside the daemon | 20 seconds, or the caller's remaining time less 2 seconds |
 | `get_camera_snapshot` MCP tool's own overall budget | 25 seconds |
 | PLI (keyframe request) rate, coalesced across every consumer | at most 1 per second |
 | Video recording default max duration | 12 hours |
@@ -155,19 +157,25 @@ filesystem directly.
 
 ## Troubleshooting
 
-### "The printer's camera is not sending video right now" / a keyframe-wait timeout
+### "The camera stream did not deliver a complete keyframe" / a keyframe-wait timeout
 
 This message means the daemon waited for a complete video keyframe and none
-arrived in time. Earlier investigation (dev_docs/camera-keyframe-rca.md)
-first suspected the K2 itself pausing its camera stream while idle; a
-follow-up, more careful investigation withdrew that theory - it found no
-correlation between the printer's own reported camera-activity fields and
-the stalls. The confirmed root cause instead was **packet loss inside a
-large keyframe with no retransmission**: a keyframe spans many RTP packets,
-and losing even one of them with no NACK-based recovery meant the whole
-keyframe could never be assembled, however long the wait continued. This is
-now fixed (a NACK generator/responder was added), but on a busy or noisy Wi-Fi
-link a similar wait can still occasionally happen and usually clears on retry.
+arrived in time. Two causes were found and fixed:
+
+- **A keyframe larger than the receive window** (v0.3.1). With the chamber
+  light on, the K2's 1280x720 keyframe spans 117-118 RTP packets (about 65 kB;
+  unlit about 13). The receiver held at most 100 packets while assembling a
+  frame, so a lit keyframe could not complete.
+  The window is now 512 packets, and the daemon log records the packet count
+  of each session's first keyframe (`camera: keyframe received ... packets=`).
+- **Packet loss inside a keyframe with no retransmission** (earlier,
+  dev_docs/camera-keyframe-rca.md): losing one packet of a keyframe with no
+  NACK-based recovery meant it could never be assembled. A NACK
+  generator/responder fixed that.
+
+If it still happens, the cause is not known yet. The daemon log line
+`camera: keyframe received ... packets=` records the keyframe size of each
+camera connection that did get one.
 
 What to check when you see this:
 

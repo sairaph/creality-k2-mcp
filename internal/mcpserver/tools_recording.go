@@ -131,17 +131,13 @@ func recordingFailure(what string, err error) *mcp.CallToolResult {
 		})
 	case strings.Contains(msg, "no camera keyframe"):
 		// The daemon's own recorder.go waits recorderKeyframeWait for a
-		// keyframe before failing this way (review backlog item 47): the
-		// common cause is network packet loss on the camera stream
-		// preventing a complete keyframe from ever assembling (dev_docs/
-		// camera-keyframe-rca.md's corrected analysis - not the printer
-		// pausing its camera, an earlier, unsupported claim that has been
-		// withdrawn), not a connection problem, so this gets the same clear
-		// message as get_camera_snapshot's equivalent timeout rather than a
-		// generic "unreachable printer" hint.
+		// keyframe before failing this way (review backlog item 47). That is
+		// not a connection problem, so this gets the same message as
+		// get_camera_snapshot's equivalent timeout rather than a generic
+		// "unreachable printer" hint.
 		return render.ErrorResult(render.Error{
 			Code:    render.CodeUnavailable,
-			Message: shortMessage(fmt.Sprintf("Failed to %s: %s.", what, noVideoMessage)),
+			Message: shortMessage(fmt.Sprintf("Failed to %s: %s; try again.", what, noVideoMessage(daemon.RecorderKeyframeWait))),
 			Hint:    noVideoHint,
 		})
 	case strings.Contains(msg, "not yet available"):

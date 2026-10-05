@@ -204,6 +204,27 @@ creality-k2-mcp uninstall     # remove from every registered AI client
 
 Full command reference: [docs/cli.md](docs/cli.md).
 
+## Troubleshooting
+
+- **The MCP tools stop answering.** Restart the AI client, or reconnect its
+  MCP server from the client's MCP settings. Never kill the
+  `creality-k2-mcp` server process: in the field the Codex client did not start
+  it again, and every later tool call failed until a new session; other
+  clients may behave the same. The background
+  camera daemon is a separate process and restarts by itself.
+- **After an update, behaviour has not changed.** An AI client keeps the server
+  process it started. Tool replies that carry the printer state, and
+  `list_printers`, name the process that answered (`server_version`,
+  `server_pid` in the frontmatter); if `server_version` differs from
+  `creality-k2-mcp version`, restart the AI client. `creality-k2-mcp doctor`
+  shows the installed version.
+- **Writes refused as `preparing` (a print start) while nothing is printing.**
+  `cancel_print` sends the printer's own stop. A start this server sent stops
+  counting once the printer is at rest, or 15 minutes after it at the latest.
+  Details: [docs/safety.md](docs/safety.md#the-start-window).
+- **Camera snapshot fails with no keyframe.** See
+  [docs/camera.md](docs/camera.md#troubleshooting).
+
 ## Documentation
 
 | Guide | Contents |

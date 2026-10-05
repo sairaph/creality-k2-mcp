@@ -90,13 +90,16 @@ var pliCoalesceInterval = 1 * time.Second
 // constant, so a test can shrink it.
 var hubKeepWarmDuration = 60 * time.Second
 
-// hubSnapshotBudget bounds Hub.Snapshot's wait for the buffer's first
-// complete keyframe on a cold connection, regardless of the caller's own
-// ctx deadline - matching internal/camera.Snapshot's own snapshotBudget
-// rationale (dev_docs/camera-keyframe-rca.md, dev_docs/t11e-soak-report.md:
-// live cold-connect latency observed up to 16s). A package variable, not a
-// constant, so a test can shrink it.
-var hubSnapshotBudget = 20 * time.Second
+// MaxSnapshotBudget is the longest Hub.Snapshot waits for the buffer's first
+// complete keyframe on a cold connection (dev_docs/camera-keyframe-rca.md,
+// dev_docs/t11e-soak-report.md: live cold-connect latency observed up to
+// 16s). A caller's own shorter budget (CameraSnapshotParams.BudgetMs)
+// shortens it.
+const MaxSnapshotBudget = 20 * time.Second
+
+// hubSnapshotBudget is MaxSnapshotBudget as a package variable, so a test can
+// shrink it.
+var hubSnapshotBudget = MaxSnapshotBudget
 
 // hubSnapshotPollInterval is how often Hub.Snapshot re-checks the rolling
 // buffer while waiting for it to become usable. A package variable, not a
@@ -343,18 +346,34 @@ func (h *Hub) Unsubscribe(host string, id int) {
 
 // Snapshot returns the latest decodable picture from host's camera: if no
 // upstream connection is currently open, one is opened; the call then
-// waits (bounded by hubSnapshotBudget, regardless of ctx's own deadline)
+// waits (bounded by budget, or hubSnapshotBudget when budget is 0 or larger)
 // for the rolling GOP buffer to hold a usable keyframe, decodes it with
 // this printer's own reused, serialized decode.Decoder, and returns the
 // result. No PLI is sent when the buffer is already fresh (review backlog
 // item 51). The connection is kept warm for hubKeepWarmDuration after this
 // call returns, so a follow-up snapshot taken soon after reuses it instead
-// of paying a fresh cold-connect cost.
-func (h *Hub) Snapshot(ctx context.Context, host string) (*camera.SnapshotResult, error) {
+// of paying a fresh cold-connect cost. A failed snapshot does not keep it
+// warm: a camera that delivered no keyframe in the whole budget is not worth
+// holding open for 60 s (field feedback item 3).
+//
+// budget is the caller's remaining time. The socket server runs a handler to
+// completion and cannot see its client leave, so this bound is what stops the
+// daemon waiting for a caller that has already given up.
+func (h *Hub) Snapshot(ctx context.Context, host string, budget time.Duration) (_ *camera.SnapshotResult, err error) {
 	pc := h.getOrCreate(host)
 	pc.acquire(h)
-	defer pc.release(h, hubKeepWarmDuration)
-	return pc.snapshot(ctx)
+	defer func() {
+		warm := hubKeepWarmDuration
+		if err != nil {
+			warm = 0
+		}
+		pc.release(h, warm)
+	}()
+	wait := hubSnapshotBudget
+	if budget > 0 && budget < wait {
+		wait = budget
+	}
+	return pc.snapshot(ctx, wait)
 }
 
 // RequestKeyframe asks host's upstream camera session for a fresh keyframe
@@ -679,8 +698,8 @@ func (pc *printerCamera) dispatch(au camera.AccessUnit) {
 
 // snapshot is Hub.Snapshot's implementation once the connection has been
 // acquired. See Hub.Snapshot's doc comment for the overall contract.
-func (pc *printerCamera) snapshot(ctx context.Context) (*camera.SnapshotResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, hubSnapshotBudget)
+func (pc *printerCamera) snapshot(parent context.Context, wait time.Duration) (*camera.SnapshotResult, error) {
+	ctx, cancel := context.WithTimeout(parent, wait)
 	defer cancel()
 
 	ticker := time.NewTicker(hubSnapshotPollInterval)
@@ -710,7 +729,12 @@ func (pc *printerCamera) snapshot(ctx context.Context) (*camera.SnapshotResult, 
 
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("daemon: snapshot: no keyframe received from %s within %s: %w", pc.host, hubSnapshotBudget, ctx.Err())
+			if parent.Err() != nil {
+				// Cancelled from outside (daemon shutdown, a recording that
+				// stopped): not a camera that failed to deliver.
+				return nil, fmt.Errorf("daemon: snapshot of %s: %w", pc.host, parent.Err())
+			}
+			return nil, fmt.Errorf("daemon: snapshot of %s: %w", pc.host, &camera.NoKeyframeError{Wait: wait})
 		case <-ticker.C:
 		}
 	}

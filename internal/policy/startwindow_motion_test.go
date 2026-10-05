@@ -104,7 +104,7 @@ func TestStartWindow_RecordWinsOverSelfTestCalibrating(t *testing.T) {
 // Signals only (no record in this process, for example after a restart) + motion.
 func TestStartWindow_SignalsOnlyWinOverSelfTestMotion(t *testing.T) {
 	f, p, printer := motionSetup(t, "sw-motion-sig")
-	f.setSelfTest(40)
+	f.cfs9999(func(c *fakeCFS) { c.withSelfTest = 40; c.deviceState = 1 }) // a live self-test
 	f.withLock(func() { f.homing = true })
 	assertWindowGates(t, p, f, printer, "self-test homing")
 	f.withLock(func() { f.homing = false; f.leveling = 1 })

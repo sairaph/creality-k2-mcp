@@ -15,9 +15,11 @@ import (
 // (bucket I), which would let every write through and leave cancel
 // unavailable. Two things close the hole:
 //
-//   - printerstate derives "preparing" (bucket PP) from the signals that
-//     survive a restart: 9999 withSelfTest not 100, or a non-identity
-//     box.map.
+//   - printerstate derives "preparing" (bucket PP) from live 9999 evidence of
+//     a start, which survives a restart of this server: state 9, 1 or 7 with
+//     deviceState 1, or a self-test in progress while the printer shows
+//     activity (printerstate startWindowSignal). A leftover withSelfTest or
+//     filament map alone no longer counts (v0.3.1, field feedback item 6).
 //   - this file keeps a per-identity startInFlight record, set right before
 //     the colorMatch frame and NOT cleared when Execute returns, so the
 //     window is covered before either signal has appeared. applyStartWindow
@@ -55,6 +57,13 @@ var (
 	}
 	startWindowStopCommands = []string{"stop (port 9999)"}
 )
+
+// StartWindowWayOut is how to leave a start window that does not end (field
+// feedback items 1 and 4). It is appended to a refusal in the window and used
+// by get_printer_status's guidance.
+const StartWindowWayOut = "If the printer is not really starting a print, cancel_print sends Creality's own stop. " +
+	"A start this server sent stops counting once the printer is at rest, or 15 minutes after it at the latest. " +
+	"Never kill this MCP server's process to clear it: restart the AI client or its MCP connection instead"
 
 const startWindowCancelRefusal = "the printer is in its print-start self-test, where a cancel from this server is not known to stop it: stop it on the printer screen"
 
@@ -134,12 +143,45 @@ func startJobChanged(before, after *printerstate.JobIdentity) bool {
 	return before.Filename != after.Filename || before.UUID != after.UUID || before.StartTime != after.StartTime
 }
 
+// startRestGrace is how long after the start frame the printer must have had
+// to show the start before a snapshot at rest ends the record (v0.3.1 R2).
+// Every captured start showed 9999 state 9 and 1 within a second; the margin
+// covers a slow printer response and is not a tuning knob.
+const startRestGrace = 10 * time.Second
+
+// atRest reports whether snap, derived without the start record, shows a
+// printer positively at rest: bucket I (so no start signal, no homing,
+// calibrating, feeding or idle_timeout Printing), both heater targets known
+// and 0, and 9999 answering with deviceState 0 and a state that is not a
+// start (9, 1) or a stop (7). An unreachable 9999 or a missing heater reading
+// is not at rest: the record stays until its other end rules.
+func atRest(snap printerstate.Snapshot, derived printerstate.Derived) bool {
+	if derived.Bucket != printerstate.BucketI || !snap.WS9999Reachable {
+		return false
+	}
+	if snap.Extruder == nil || snap.Extruder.Target == nil || *snap.Extruder.Target != 0 {
+		return false
+	}
+	if snap.HeaterBed == nil || snap.HeaterBed.Target == nil || *snap.HeaterBed.Target != 0 {
+		return false
+	}
+	ws := snap.WS9999
+	if !ws.DeviceState.Present || ws.DeviceState.Value != 0 {
+		return false
+	}
+	return !ws.State.Present || (ws.State.Value != 9 && ws.State.Value != 1 && ws.State.Value != 7)
+}
+
 // activeStartRec returns the record if it is still in force as of snap, and
 // clears it otherwise: 15 minutes after issue, or once a snapshot shows
 // print_stats printing, paused or error, or complete or cancelled for a
 // different job (filename, uuid or start_time) than the one before the start
-// (plan 8a.1). A snapshot taken before the record existed never clears it.
-func (l *printerLock) activeStartRec(snap printerstate.Snapshot) *startInFlight {
+// (plan 8a.1), or (v0.3.1 R2) the printer positively at rest at least
+// startRestGrace after the start frame was sent: a stop on the printer screen
+// or a start the printer never took (field feedback item 1). derived is the
+// derivation of snap without the record. A snapshot taken before the record
+// existed never clears it.
+func (l *printerLock) activeStartRec(snap printerstate.Snapshot, derived printerstate.Derived) *startInFlight {
 	rec := l.getStartRec()
 	if rec == nil {
 		return nil
@@ -152,9 +194,15 @@ func (l *printerLock) activeStartRec(snap printerstate.Snapshot) *startInFlight 
 		return nil
 	}
 	// A stopped or failed start (9999 state 3 or 4), seen in a snapshot taken after
-	// the start frame and its grace period, ends the record.
-	if st := snap.WS9999.State; st.Present && (st.Value == 3 || st.Value == 4) {
-		if sent := l.startSentAt(rec); !sent.IsZero() && snap.Taken.After(sent.Add(startStateGrace)) {
+	// the start frame and its grace period, ends the record, and so does a printer
+	// positively at rest after the longer rest grace. Neither applies before the
+	// frame was sent (sentAt zero, e.g. during the map check).
+	if sent := l.startSentAt(rec); !sent.IsZero() {
+		if st := snap.WS9999.State; st.Present && (st.Value == 3 || st.Value == 4) && snap.Taken.After(sent.Add(startStateGrace)) {
+			l.clearStartRecIf(rec)
+			return nil
+		}
+		if snap.Taken.After(sent.Add(startRestGrace)) && atRest(snap, derived) {
 			l.clearStartRecIf(rec)
 			return nil
 		}
@@ -226,7 +274,7 @@ func applyStartWindow(derived printerstate.Derived, snap printerstate.Snapshot, 
 func deriveFor(pl *printerLock, snap printerstate.Snapshot, pending *printerstate.PendingAction) printerstate.Derived {
 	derived := printerstate.DeriveActivityState(snap, pending)
 	pl.observePause(snap)
-	derived = applyStartWindow(derived, snap, pl.activeStartRec(snap))
+	derived = applyStartWindow(derived, snap, pl.activeStartRec(snap, derived))
 	derived = applyFlights(derived, snap, pl.activeResumeFlight(snap), pl.activePauseFlight(snap))
 	derived.PauseRecorded = pl.getPauseRec() != nil
 	return derived

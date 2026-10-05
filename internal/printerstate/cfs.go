@@ -3,6 +3,8 @@ package printerstate
 import (
 	"fmt"
 	"sort"
+
+	"github.com/sairaph/creality-k2-mcp/internal/crealityws"
 )
 
 // CFS flags (dev_docs/plan-v0.2.0.md sections 2.3 and 8a.6; review B1/B2).
@@ -96,6 +98,8 @@ func cfsFlagsFor(snap Snapshot, connected bool) (known, quiescent, errFlag bool,
 		errFlag = true
 		reasons = append(reasons, fmt.Sprintf(format, args...))
 	}
+	// The texts state only what was observed (plan-v0.3.1.md R7): the printer
+	// reports the value, and the meaning of a code is not known here.
 	if ws.Err.Present && (ws.Err.ErrCode != 0 || ws.Err.Key != 0) {
 		flagErr("cfs error: 9999 err is errcode %d key %d", ws.Err.ErrCode, ws.Err.Key)
 	}
@@ -103,10 +107,14 @@ func cfsFlagsFor(snap Snapshot, connected bool) (known, quiescent, errFlag bool,
 		flagErr("cfs error: 9999 materialStatus is %d", ws.MaterialStatus.Value)
 	}
 	if snap.PauseResume != nil && snap.PauseResume.ResumeErr != nil && *snap.PauseResume.ResumeErr {
-		flagErr("cfs error: pause_resume.resume_err is true")
+		if snap.PrintStats != nil && snap.PrintStats.State == "paused" {
+			flagErr("cfs error: pause_resume.resume_err is true (the printer will skip the next resume once)")
+		} else {
+			flagErr("cfs error: pause_resume.resume_err is true")
+		}
 	}
 	if snap.Box != nil && snap.Box.FilamentUseup != nil && *snap.Box.FilamentUseup != 0 {
-		flagErr("cfs error: box.filament_useup is %d", *snap.Box.FilamentUseup)
+		flagErr("cfs error: box.filament_useup is %d (the CFS reports filament used up; in the field it cleared after loading filament on the printer screen)", *snap.Box.FilamentUseup)
 	}
 
 	// Quiescent: positive idle values only; everything else is busy.
@@ -138,8 +146,9 @@ func cfsFlagsFor(snap Snapshot, connected bool) (known, quiescent, errFlag bool,
 // (deviceState 10 or 11) is a filament operation. Unlike every other 9999
 // use in this package this is authoritative on its own, because no Moonraker
 // field reports a CFS feed (dev_docs/cfs-state-analysis.md section 8.1); the
-// row is evaluated after printing/paused/complete, so it can never shadow
-// them.
+// row is evaluated after printing and paused, so it can never shadow them, but
+// before cancelled and complete (v0.3.1), so a load from the printer screen
+// after a finished or cancelled print is a filament operation.
 func cfsSignalOperation(snap Snapshot, cfsOK bool) (bool, string) {
 	if !cfsOK || !snap.WS9999Reachable {
 		return false, ""
@@ -153,67 +162,115 @@ func cfsSignalOperation(snap Snapshot, cfsOK bool) (bool, string) {
 	return false, ""
 }
 
-// startWindowSignal implements the printerstate half of plan 8a.1: after a
-// CFS or spool start frame the printer runs a 3-4 minute self-test with
-// print_stats still at its previous value (standby, or the previous job's
-// complete or cancelled: dev_docs/cfs-print-start.md section 4.3, and Klipper
-// keeps those until the next job starts), so one of those states plus either
-// signal below means a start is in flight. 9999 withSelfTest present and not
-// 100 is the self-test progress; a non-identity box.map is the map colorMatch
-// wrote for the job (identity again at the end of the print). Printing,
-// paused, error and everything else are never considered, so this never
-// shadows them.
+// startWindowSignal implements the printerstate half of plan 8a.1, as revised
+// in v0.3.1 (dev_docs/plan-v0.3.1.md R1): after a CFS or spool start frame the
+// printer runs a 3-4 minute self-test with print_stats still at its previous
+// value (standby, or the previous job's complete or cancelled: Klipper keeps
+// those until the next job starts), so one of those states plus positive 9999
+// evidence of a running start means a start is in flight. Printing, paused,
+// error and everything else are never considered, so this never shadows them.
+//
+// The evidence must be live, because 9999 fields can be stale: after a printer
+// power cycle withSelfTest read 0 at rest for more than a day (field feedback
+// items 1 and 6), and a non-identity box.map survives an aborted print, so
+// neither creates a start window on its own. Two forms count:
+//
+//   - 9999 state 9, 1 or 7 with deviceState 1 (or deviceState absent: fail
+//     closed). Observed live: state 9 then 1 within a second of every start
+//     frame with deviceState 1 for the whole self-test, and state 7 (stopping)
+//     keeps deviceState 1 until the stop ends on state 4, deviceState 0. After
+//     a completion or a cancel the printer reads state 2 or 4 with deviceState
+//     0, so complete and cancelled need no separate exclusion.
+//   - withSelfTest not 100 while the same snapshot shows live activity (9999
+//     state 9, 1 or 7, a deviceState other than 0, or idle_timeout Printing).
+//     Heater targets do not count: heating an idle printer (a preheat, or a
+//     temperature set from here) must not turn a stale withSelfTest into a
+//     start window that then refuses turning the heater off (review M1).
+//     This keeps a net for start types whose 9999 signature was never
+//     captured (a screen start, a spool start), while the quiet stale frame
+//     derives idle. A filament load or unload (deviceState 10
+//     or 11) is never a start, so it derives filament_operation instead.
+//
+// A non-identity box.map is only named in the reason.
 func startWindowSignal(snap Snapshot) (bool, string) {
-	return startSignal(snap, true)
-}
-
-// liveStartSignal is startWindowSignal without the filament-map signal. The
-// self-test progress (withSelfTest not 100) and 9999 state 1, 9 or 7 with standby
-// are live: they exist only while a start or its stop is running. A non-identity
-// box.map can be left over (an aborted print that never wrote identity back), so on
-// its own it is a stale signal: it may still say "preparing" for an otherwise idle
-// printer, but it must never relabel a genuine homing or calibration as the
-// self-test's own. This server's own start record (the policy layer) is preferred
-// over any signal and is not subject to this.
-func liveStartSignal(snap Snapshot) (bool, string) {
-	return startSignal(snap, false)
-}
-
-func startSignal(snap Snapshot, withMap bool) (bool, string) {
-	if snap.PrintStats == nil {
+	if snap.PrintStats == nil || !snap.WS9999Reachable {
 		return false, ""
 	}
 	prev := snap.PrintStats.State
 	if prev != "standby" && prev != "complete" && prev != "cancelled" {
 		return false, ""
 	}
-	// 9999 state 9, 1 or 7 with print_stats STANDBY is a start (another client's,
-	// or one whose record this process lacks): observed live, state 9 then 1 within
-	// a second of a CFS start frame while print_stats stayed standby for the whole
-	// self-test; 7 (stopping) is the wind-down after a stop frame during it. Only
-	// standby: what 9999 reads after a natural completion or a Moonraker cancel was
-	// never captured, and Klipper keeps complete or cancelled until the next job, so
-	// a lingering 1 or 7 there would be a permanent false "preparing". The
-	// withSelfTest and box.map signals below cover a real start over a stale
-	// complete or cancelled. State 4 (aborted) persists at rest and is never a signal.
-	if st := snap.WS9999.State; st.Present && prev == "standby" && (st.Value == 1 || st.Value == 9 || st.Value == 7) {
-		return true, fmt.Sprintf("print_stats.state is standby while 9999 state is %d (a print start or its stop is in progress)", st.Value)
+	ws := snap.WS9999
+	startState := ws.State.Present && (ws.State.Value == 9 || ws.State.Value == 1 || ws.State.Value == 7)
+	var reason string
+	switch {
+	case startState && (!ws.DeviceState.Present || ws.DeviceState.Value == 1):
+		reason = fmt.Sprintf("print_stats.state is %s while 9999 state is %d with deviceState %s (a print start or its stop is in progress)",
+			prev, ws.State.Value, optIntText(ws.DeviceState))
+	case ws.WithSelfTest.Present && ws.WithSelfTest.Value != 100 && !loadingOrUnloading(snap):
+		activity := liveActivity(snap, startState)
+		if activity == "" {
+			return false, ""
+		}
+		reason = fmt.Sprintf("print_stats.state is %s while 9999 withSelfTest is %d, not 100, and %s (a print start's self-test is running)",
+			prev, ws.WithSelfTest.Value, activity)
+	default:
+		return false, ""
 	}
-	if st := snap.WS9999.WithSelfTest; st.Present && st.Value != 100 {
+	if m := nonIdentityMap(snap); m != "" {
+		reason += "; box.map is not the identity map (" + m + ")"
+	}
+	return true, reason
+}
 
-		return true, fmt.Sprintf("print_stats.state is %s while 9999 withSelfTest is %d, not 100 (a print start's self-test is running)", prev, st.Value)
+// loadingOrUnloading reports whether 9999 deviceState is 10 or 11 (a filament
+// load or unload, started on the printer screen or by the CFS).
+func loadingOrUnloading(snap Snapshot) bool {
+	ds := snap.WS9999.DeviceState
+	return ds.Present && (ds.Value == 10 || ds.Value == 11)
+}
+
+// liveActivity names the first sign in snap that the printer is doing
+// something right now, or returns "" when it shows none. The quiet stale frame
+// after a power cycle (state 0, deviceState 0, idle_timeout not Printing)
+// shows none, heated or not.
+func liveActivity(snap Snapshot, startState bool) string {
+	ws := snap.WS9999
+	switch {
+	case startState:
+		return fmt.Sprintf("9999 state is %d", ws.State.Value)
+	case ws.DeviceState.Present && ws.DeviceState.Value != 0:
+		return fmt.Sprintf("9999 deviceState is %d", ws.DeviceState.Value)
+	case snap.IdleTimeout != nil && snap.IdleTimeout.State != nil && *snap.IdleTimeout.State == "Printing":
+		return "idle_timeout.state is Printing"
 	}
-	if withMap && snap.Box != nil {
-		keys := make([]string, 0, len(snap.Box.Map))
-		for k := range snap.Box.Map {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			if v := snap.Box.Map[k]; v != k {
-				return true, fmt.Sprintf("print_stats.state is %s while box.map is not the identity map (%s -> %s): a CFS print start wrote its filament map", prev, k, v)
-			}
+	return ""
+}
+
+// nonIdentityMap returns the first box.map entry (in key order) that is not
+// the identity, as "key -> value", or "" when the map is the identity or
+// absent.
+func nonIdentityMap(snap Snapshot) string {
+	if snap.Box == nil {
+		return ""
+	}
+	keys := make([]string, 0, len(snap.Box.Map))
+	for k := range snap.Box.Map {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if v := snap.Box.Map[k]; v != k {
+			return k + " -> " + v
 		}
 	}
-	return false, ""
+	return ""
+}
+
+// optIntText renders an optional 9999 integer for a reason.
+func optIntText(v crealityws.Int) string {
+	if !v.Present {
+		return "absent"
+	}
+	return fmt.Sprint(v.Value)
 }

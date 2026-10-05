@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,9 @@ type printerSummary struct {
 
 type listPrintersFront struct {
 	Printers []printerSummary `yaml:"printers"`
+	// ServerVersion and ServerPID: see printerstate.StateBlock.
+	ServerVersion string `yaml:"server_version,omitempty"`
+	ServerPID     int    `yaml:"server_pid,omitempty"`
 }
 
 func listPrintersHandler(s *Server) func(context.Context, *mcp.CallToolRequest, listPrintersInput) (*mcp.CallToolResult, any, error) {
@@ -123,7 +127,10 @@ func listPrintersHandler(s *Server) func(context.Context, *mcp.CallToolRequest, 
 		}
 		wg.Wait()
 
-		front := &listPrintersFront{Printers: summaries}
+		front := &listPrintersFront{Printers: summaries, ServerPID: os.Getpid()}
+		if v := serverVersion.Load(); v != nil {
+			front.ServerVersion = *v
+		}
 		return render.SuccessResult(front, listPrintersBody(summaries)), nil, nil
 	}
 }
