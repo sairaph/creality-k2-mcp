@@ -455,6 +455,12 @@ stopping during the self-test, pause and resume of a CFS print, and editing the 
 spool (both channels confirmed). Each of these has a switch in the code that is now on:
 `stopDuringStartVerified` and `sideSpoolEditVerified`.
 
+Verified in the supervised session (2026-10-06): a CFS start sent from here and stopped
+from here during the self-test; one stopped on the printer screen (writes were available
+again 18 s after the printer came to rest); a print started on the printer screen (the
+same 9999 signature as a start from here, recognised from the signals alone); and a
+filament load on the printer screen (a filament operation, never a print start).
+
 Still off: `spoolStartVerified`, starting from the side spool with a CFS connected. With a
 CFS connected the side spool is not in the feed path, so it could not be tested; it stays
 refused. A tool change during a print was also observed live (see the next section).
