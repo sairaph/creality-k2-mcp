@@ -187,9 +187,11 @@ func cfsSignalOperation(snap Snapshot, cfsOK bool) (bool, string) {
 //     temperature set from here) must not turn a stale withSelfTest into a
 //     start window that then refuses turning the heater off (review M1).
 //     This keeps a net for start types whose 9999 signature was never
-//     captured (a screen start, a spool start), while the quiet stale frame
-//     derives idle. A filament load or unload (deviceState 10
-//     or 11) is never a start, so it derives filament_operation instead.
+//     captured (a spool start), while the quiet stale frame
+//     derives idle. Filament moving (deviceState 10 or 11, or a feedState
+//     outside the at-rest values) is never a start: a load from the printer
+//     screen (captured 2026-10-06) reports feedState 101 with deviceState 0,
+//     homes and heats, while no captured start ever moved feedState.
 //
 // A non-identity box.map is only named in the reason.
 func startWindowSignal(snap Snapshot) (bool, string) {
@@ -207,7 +209,7 @@ func startWindowSignal(snap Snapshot) (bool, string) {
 	case startState && (!ws.DeviceState.Present || ws.DeviceState.Value == 1):
 		reason = fmt.Sprintf("print_stats.state is %s while 9999 state is %d with deviceState %s (a print start or its stop is in progress)",
 			prev, ws.State.Value, optIntText(ws.DeviceState))
-	case ws.WithSelfTest.Present && ws.WithSelfTest.Value != 100 && !loadingOrUnloading(snap):
+	case ws.WithSelfTest.Present && ws.WithSelfTest.Value != 100 && !filamentMoving(snap):
 		activity := liveActivity(snap, startState)
 		if activity == "" {
 			return false, ""
@@ -223,11 +225,15 @@ func startWindowSignal(snap Snapshot) (bool, string) {
 	return true, reason
 }
 
-// loadingOrUnloading reports whether 9999 deviceState is 10 or 11 (a filament
-// load or unload, started on the printer screen or by the CFS).
-func loadingOrUnloading(snap Snapshot) bool {
-	ds := snap.WS9999.DeviceState
-	return ds.Present && (ds.Value == 10 || ds.Value == 11)
+// filamentMoving reports whether 9999 shows filament being moved: deviceState
+// 10 or 11 (load or unload), or a feedState outside the at-rest values (the
+// CFS feeding, as a load from the printer screen reports it).
+func filamentMoving(snap Snapshot) bool {
+	ws := snap.WS9999
+	if ws.DeviceState.Present && (ws.DeviceState.Value == 10 || ws.DeviceState.Value == 11) {
+		return true
+	}
+	return ws.FeedState.Present && !cfsIdleFeedStates[ws.FeedState.Value]
 }
 
 // liveActivity names the first sign in snap that the printer is doing
