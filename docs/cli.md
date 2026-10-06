@@ -50,7 +50,7 @@ install). The wizard has these steps in order:
    shown.
 3. **Client selection** - pick which AI clients on this machine to register
    the server with (Claude Desktop, Claude Code, Cursor, VS Code, Windsurf,
-   Zed, and more; already-configured clients are pre-checked).
+   Zed, and more; the clients found on this machine are pre-checked).
 4. **Apply** - writes the registry and settings files, then registers the
    server in each selected client's own config, idempotently (existing
    entries and other servers are preserved).

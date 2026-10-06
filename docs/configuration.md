@@ -130,7 +130,7 @@ actually protect against, and why the default preset is `camera` rather than
 
 | Preset | Registers |
 | --- | --- |
-| `monitor` | Status, files (read), history, console - read-only tools only |
+| `monitor` | Status, files (read), history, console, registry and discovery tools, and the filament reads (`get_filaments`, `list_filament_catalog`); read-only |
 | `camera` | Everything in `monitor`, plus the camera tools (snapshot, live view, recording) |
 | `control` | Everything in `camera`, plus every control (write) tool |
 
