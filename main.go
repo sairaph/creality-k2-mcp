@@ -444,7 +444,7 @@ func updateOptions() update.Options {
 func newDoctor(ctx context.Context) *doctor.Runner {
 	opts := updateOptions()
 	r := doctor.New(
-		doctor.ExecutableCheck{},
+		doctorchecks.ExecutableCheck{},
 		doctor.PathCheck{Dir: opts.InstallDir},
 		versionCheck{},
 		clientsCheck{},
