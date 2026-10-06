@@ -1,29 +1,34 @@
 // Package tui implements creality-k2-mcp's interactive application
-// (dev_docs/plan-v0.1.0.md's "TUI and CLI" section, T13b): the full-screen
-// app a bare invocation opens on a terminal (main.go's runApp). It follows
-// the mcp-wizard/app framework (menu, list, table, confirm, detail, async)
-// already used by main.go's own menu/doctor screens, and reuses the same
-// business logic the one-shot CLI commands (internal/clicmd) and the install
-// wizard (internal/wizard) call: internal/wizard's exported registry
-// merge/save functions for Printers, internal/printerstate's Take/
-// DeriveActivityState/BuildStateBlock for Status, and internal/daemon's
-// client for Camera and Recordings. No other package's exported API is
-// changed to build this package.
+// (dev_docs/plan-v0.1.0.md's "TUI and CLI" section, T13b, reworked in v0.4.0 per
+// dev_docs/tui-design-v0.4.0.md): the full-screen app a bare invocation opens
+// on a terminal (main.go's runApp). Every screen is an own type behind the
+// Screen interface and every view is drawn by internal/tui/frame (header, blank
+// row, body, footer pinned to the last row), so the app has one back/quit rule
+// (esc goes back one level, q quits, ctrl+c quits at once) and footers that are
+// built from the same state the keys are. It reuses the business logic the
+// one-shot CLI commands (internal/clicmd) and the install wizard
+// (internal/wizard) call: internal/wizard's exported registry merge/save
+// functions for Printers, internal/printerstate's Take/DeriveActivityState/
+// BuildStateBlock for Status, internal/daemon's client for Camera and
+// Recordings, internal/settingsform for Settings and internal/doctorlist's
+// checks for Doctor.
 package tui
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/sairaph/mcp-wizard/app"
-	"github.com/sairaph/mcp-wizard/app/detail"
-	"github.com/sairaph/mcp-wizard/app/menu"
+	"github.com/sairaph/mcp-wizard/doctor"
 
 	"github.com/sairaph/creality-k2-mcp/internal/camera"
 	"github.com/sairaph/creality-k2-mcp/internal/daemon"
 	"github.com/sairaph/creality-k2-mcp/internal/domain"
 	"github.com/sairaph/creality-k2-mcp/internal/printerclient"
 	"github.com/sairaph/creality-k2-mcp/internal/printerstate"
+	"github.com/sairaph/creality-k2-mcp/internal/tui/frame"
 	"github.com/sairaph/creality-k2-mcp/internal/wizard"
 )
 
@@ -53,9 +58,9 @@ type DaemonClient interface {
 type PrinterClientsFunc func(p domain.Printer) printerstate.Deps
 
 // Deps bundles everything the app needs beyond a context, so a test can
-// supply fakes for discovery, printer state and the daemon without ever
-// touching a real registry file, printer or the network (AGENTS.md hard
-// testing rule), and without ever launching a real browser.
+// supply fakes for discovery, printer state, the daemon and the doctor checks
+// without ever touching a real registry file, printer or the network (AGENTS.md
+// hard testing rule), and without ever launching a real browser.
 type Deps struct {
 	// Dir resolves which registry file Printers/Status/Camera read and
 	// (for Printers) write, matching domain.RegistryPath: the project file
@@ -90,10 +95,10 @@ type Deps struct {
 	// rule as Opener.
 	OpenFolder func(path string) error
 
-	// RunDoctor runs every doctor check and renders the report as text, for
-	// the Doctor screen. Set by main.go from the same doctor.Runner the
-	// `doctor` command uses.
-	RunDoctor func(ctx context.Context) string
+	// DoctorChecks builds the doctor check list the Doctor screen runs one by
+	// one (internal/doctorlist.Checks, the same list the `doctor` command
+	// runs). Nil means no checks.
+	DoctorChecks func() []doctor.Check
 }
 
 func (d Deps) withDefaults() Deps {
@@ -106,201 +111,204 @@ func (d Deps) withDefaults() Deps {
 	if d.OpenFolder == nil {
 		d.OpenFolder = openFolder
 	}
-	if d.RunDoctor == nil {
-		d.RunDoctor = func(ctx context.Context) string { return "" }
+	if d.DoctorChecks == nil {
+		d.DoctorChecks = func() []doctor.Check { return nil }
 	}
 	return d
 }
 
-// step identifies the current top-level screen.
+// Mode tells the root how a screen wants keys handled right now.
+type Mode int
+
 const (
-	stepMenu app.Step = iota
-	stepDoctor
-	stepPrinters
-	stepStatus
-	stepCamera
-	stepRecordings
-	stepSettings
+	// ModeNormal: q quits, esc goes back, every other key goes to the screen.
+	ModeNormal Mode = iota
+	// ModeTyping: a text field has focus; q is a character, esc cancels the
+	// field and enter confirms it.
+	ModeTyping
+	// ModeModal: a confirm dialog is open; the screen reads y, n, q, enter.
+	ModeModal
+	// ModeBusy: a write is in flight; every key is ignored except ctrl+c.
+	ModeBusy
 )
 
-// Model is the whole application's tea.Model.
+// Nav is what a screen asks the root to do after an Update.
+type Nav int
+
+const (
+	NavNone Nav = iota
+	// NavLeave returns to the menu.
+	NavLeave
+	// NavQuit ends the program.
+	NavQuit
+)
+
+// Screen is one app screen. The root owns the size and the frame: it passes
+// the terminal width and the body row count (H-3) on every View, so a screen
+// keeps no copy of the size and clamps its cursor and scroll inside Body.
+type Screen interface {
+	Init() tea.Cmd
+	// Update mutates the screen in place. The root has already handled q, esc
+	// and ctrl+c according to Mode, so keys arriving here are the screen's own.
+	Update(msg tea.Msg) (tea.Cmd, Nav)
+	// Back is called for esc: true means the screen handled it itself (closed
+	// a field, a dialog or a sub-view), false makes the root leave the screen.
+	Back() bool
+	Body(w, h int) []string
+	// Hints is the footer key list, built from the same state Update reads.
+	Hints(w, h int) []frame.Hint
+	Header() frame.Header
+	Mode() Mode
+}
+
+// closer is implemented by screens that hold background work (a scan, the
+// doctor goroutine) to cancel when the screen is left or the app quits.
+type closer interface{ Close() }
+
+// Model is the whole application's tea.Model: the root that owns the terminal
+// size, the keys common to every screen, and the frame.
 type Model struct {
-	app.AppModel
 	ctx     context.Context
 	deps    Deps
 	version string
 
-	menu   *menu.Model
-	detail *detail.Model // doctor report
+	w, h int // from the last tea.WindowSizeMsg; 0 until the first one
 
-	printers   *printersScreen
-	status     *statusScreen
-	camera     *cameraScreen
-	recordings *recordingsScreen
-	settings   *settingsScreen
+	menu   *menuScreen
+	screen Screen
 }
 
 // newModel builds the application model, shared by Run and by this
 // package's own tests (which drive Init/Update/View directly instead of
-// through app.Run's real tea.Program, so a test never opens a terminal).
+// through a real tea.Program, so a test never opens a terminal).
 func newModel(ctx context.Context, version string, deps Deps) *Model {
 	m := &Model{ctx: ctx, version: version, deps: deps.withDefaults()}
-	m.menu = menu.New(domain.ServerName+" "+version, func() []menu.Item {
-		return []menu.Item{
-			{Label: "Printers", Action: "printers"},
-			{Label: "Status", Action: "status"},
-			{Label: "Camera", Action: "camera"},
-			{Label: "Recordings", Action: "recordings"},
-			{Label: "Settings", Action: "settings"},
-			{Label: "Run doctor", Action: "doctor"},
-			{Label: "Quit", Action: "quit"},
-		}
-	})
+	m.menu = newMenuScreen(version)
+	m.screen = m.menu
 	return m
 }
 
-// Run starts the interactive application. version is shown in the menu
-// title, matching main.go's existing convention.
+// Run starts the interactive application on its own full-screen program and
+// returns the process exit code: 0 after a quit, 1 if the program fails.
 func Run(ctx context.Context, version string, deps Deps) int {
-	return app.Run(ctx, newModel(ctx, version, deps), app.Options{Title: domain.ServerName, Version: version})
+	p := tea.NewProgram(newModel(ctx, version, deps), tea.WithContext(ctx), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil && !errors.Is(err, tea.ErrProgramKilled) {
+		fmt.Fprintf(os.Stderr, "  %s: %v\n", domain.ServerName, err)
+		return 1
+	}
+	return 0
 }
 
-func (m *Model) Init() tea.Cmd { return m.menu.Init() }
+func (m *Model) Init() tea.Cmd { return m.screen.Init() }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if handled, cmd := m.HandleGlobalKeys(msg); handled {
-		return m, cmd
-	}
-
-	if msg, ok := msg.(doctorLoadedMsg); ok {
-		m.Status = ""
-		if msg.err != nil {
-			m.detail.SetContent("Doctor failed: " + msg.err.Error())
-		} else {
-			m.detail.SetContent(msg.report)
-		}
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.w, m.h = msg.Width, msg.Height
 		return m, nil
+	case tea.KeyMsg:
+		return m, m.handleKey(msg)
 	}
-
-	// app.ActionMsg is only handled specially here for the two top-level
-	// concerns: the main menu (only while it is the active screen; every
-	// other screen's own menu/list/confirm/table subcomponents share the
-	// same Source strings and must reach that screen's own Update instead,
-	// so this never intercepts them while a sub-screen is active) and any
-	// screen signalling "I'm done, go back to the menu" via
-	// app.Action(<screen name>, "back") - a convention every screen below
-	// uses so leaving a screen always looks the same from here. Anything
-	// else falls through to the per-step routing below.
-	if am, ok := msg.(app.ActionMsg); ok {
-		switch am.Source {
-		case "menu":
-			if m.Step == stepMenu {
-				return m.handleMenuAction(am)
-			}
-		case "printers", "status", "camera", "recordings", "settings":
-			if am.Value == "back" {
-				m.Step = stepMenu
-				return m, nil
-			}
-		case "detail":
-			if m.Step == stepDoctor && am.Value == "back" {
-				m.Step = stepMenu
-				return m, nil
-			}
-		}
-	}
-
-	// Route every other message to the active screen. Each screen's own
-	// Update ignores message types it does not care about.
-	switch m.Step {
-	case stepMenu:
-		return m, m.menu.Update(msg)
-	case stepDoctor:
-		if m.detail != nil {
-			return m, m.detail.Update(msg)
-		}
-	case stepPrinters:
-		return m, m.printers.Update(m.ctx, m.deps, msg)
-	case stepStatus:
-		return m, m.status.Update(m.ctx, m.deps, msg)
-	case stepCamera:
-		return m, m.camera.Update(m.ctx, m.deps, msg)
-	case stepRecordings:
-		return m, m.recordings.Update(m.ctx, m.deps, msg)
-	case stepSettings:
-		return m, m.settings.Update(msg)
-	}
-	return m, nil
+	return m, m.apply(m.screen.Update(msg))
 }
 
-func (m *Model) handleMenuAction(msg app.ActionMsg) (tea.Model, tea.Cmd) {
-	action, _ := msg.Data.(string)
-	if msg.Value == "quit" || action == "quit" {
-		m.Quit = true
-		return m, tea.Quit
+// handleKey is the one place q, esc and ctrl+c are interpreted (R5 and R2.2
+// of the design): ctrl+c quits at once in every mode; while a write is in
+// flight nothing else works; a text field or a dialog gets every key except
+// esc; otherwise q quits and esc goes back one level.
+func (m *Model) handleKey(k tea.KeyMsg) tea.Cmd {
+	key := k.String()
+	if key == "ctrl+c" {
+		return m.quit()
 	}
-	return m.openScreen(action)
+	mode := m.screen.Mode()
+	if _, small := frame.TooSmall(m.w, m.h); small {
+		if key == "q" && mode == ModeNormal {
+			return m.quit()
+		}
+		return nil
+	}
+	if mode == ModeBusy {
+		return nil
+	}
+	if key == "esc" {
+		if !m.screen.Back() {
+			m.leave()
+		}
+		return nil
+	}
+	if key == "q" && mode == ModeNormal {
+		return m.quit()
+	}
+	return m.apply(m.screen.Update(k))
 }
 
-// openScreen switches to the screen named by a menu action, constructing
-// and initializing it fresh every time so a screen never shows stale data
-// from a previous visit.
-func (m *Model) openScreen(action string) (tea.Model, tea.Cmd) {
+// apply turns a screen's Nav into root behaviour and, from the menu, opens the
+// screen the user picked.
+func (m *Model) apply(cmd tea.Cmd, nav Nav) tea.Cmd {
+	switch nav {
+	case NavQuit:
+		return tea.Batch(cmd, m.quit())
+	case NavLeave:
+		m.leave()
+		return cmd
+	}
+	if m.screen == Screen(m.menu) {
+		if choice := m.menu.take(); choice != "" {
+			return tea.Batch(cmd, m.open(choice))
+		}
+	}
+	return cmd
+}
+
+func (m *Model) quit() tea.Cmd {
+	m.closeScreen()
+	return tea.Quit
+}
+
+// leave returns to the menu, which keeps its cursor.
+func (m *Model) leave() {
+	m.closeScreen()
+	m.screen = m.menu
+}
+
+func (m *Model) closeScreen() {
+	if c, ok := m.screen.(closer); ok {
+		c.Close()
+	}
+}
+
+// open switches to the screen named by a menu action, constructing it fresh
+// every time so a screen never shows stale data from a previous visit.
+func (m *Model) open(action string) tea.Cmd {
 	switch action {
-	case "doctor":
-		m.Step = stepDoctor
-		m.Status = "Running checks..."
-		m.detail = detail.New("Doctor", m.Status)
-		runDoctor := m.deps.RunDoctor
-		return m, tea.Batch(m.detail.Init(), func() tea.Msg {
-			return doctorLoadedMsg{report: runDoctor(m.ctx)}
-		})
 	case "printers":
-		m.Step = stepPrinters
-		m.printers = newPrintersScreen()
-		return m, m.printers.Init(m.ctx, m.deps)
+		m.screen = newPrintersScreen(m.ctx, m.deps)
 	case "status":
-		m.Step = stepStatus
-		m.status = newStatusScreen()
-		return m, m.status.Init(m.ctx, m.deps)
+		m.screen = newStatusScreen(m.ctx, m.deps)
 	case "camera":
-		m.Step = stepCamera
-		m.camera = newCameraScreen()
-		return m, m.camera.Init(m.ctx, m.deps)
+		m.screen = newCameraScreen(m.ctx, m.deps)
 	case "recordings":
-		m.Step = stepRecordings
-		m.recordings = newRecordingsScreen()
-		return m, m.recordings.Init(m.ctx, m.deps)
+		m.screen = newRecordingsScreen(m.ctx, m.deps)
 	case "settings":
-		m.Step = stepSettings
-		m.settings = newSettingsScreen()
-		return m, m.settings.Init()
+		m.screen = newSettingsScreen()
+	case "doctor":
+		m.screen = newDoctorScreen(m.ctx, m.deps)
+	default:
+		return nil
 	}
-	return m, nil
+	return m.screen.Init()
 }
 
+// View returns nothing until the first size message, then exactly H rows.
 func (m *Model) View() string {
-	switch m.Step {
-	case stepDoctor:
-		if m.detail != nil {
-			return m.detail.View()
-		}
-	case stepPrinters:
-		return m.printers.View()
-	case stepStatus:
-		return m.status.View()
-	case stepCamera:
-		return m.camera.View()
-	case stepRecordings:
-		return m.recordings.View()
-	case stepSettings:
-		return m.settings.View()
+	if m.w == 0 || m.h == 0 {
+		return ""
 	}
-	return m.menu.View()
-}
-
-// doctorLoadedMsg is the doctor report, run off the UI loop.
-type doctorLoadedMsg struct {
-	report string
-	err    error
+	if msg, small := frame.TooSmall(m.w, m.h); small {
+		return msg
+	}
+	body := m.h - 3
+	return frame.Screen(m.w, m.h, m.screen.Header(), m.screen.Body(m.w, body),
+		frame.Footer(m.w, m.screen.Hints(m.w, body)...))
 }

@@ -86,3 +86,47 @@ func samePath(a, b string) bool {
 	}
 	return a == b
 }
+
+// Shorten replaces every occurrence of the home directory in text with "~",
+// where it starts a path (it is followed by a separator, whitespace or the end
+// of the text), for places that show a path to a person. A text without the
+// home directory, or a failure to resolve it, comes back unchanged.
+func Shorten(text string) string {
+	home, err := Dir()
+	if err != nil || home == "" {
+		return text
+	}
+	home = strings.TrimRight(home, `/\`)
+	if home == "" {
+		return text
+	}
+	index := func(from int) int {
+		if runtime.GOOS != "windows" {
+			return strings.Index(text[from:], home)
+		}
+		for k := from; k+len(home) <= len(text); k++ {
+			if strings.EqualFold(text[k:k+len(home)], home) {
+				return k - from
+			}
+		}
+		return -1
+	}
+	var b strings.Builder
+	for i := 0; i < len(text); {
+		j := index(i)
+		if j < 0 {
+			b.WriteString(text[i:])
+			break
+		}
+		end := i + j + len(home)
+		if end < len(text) && !strings.ContainsRune(`/\ `+"\t\n,;:)\"'", rune(text[end])) {
+			b.WriteString(text[i:end])
+			i = end
+			continue
+		}
+		b.WriteString(text[i : i+j])
+		b.WriteString("~")
+		i = end
+	}
+	return b.String()
+}

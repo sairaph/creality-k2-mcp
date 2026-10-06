@@ -93,3 +93,23 @@ func TestRunFuncIgnoresAPreSetMarker(t *testing.T) {
 		t.Fatalf("USERPROFILE not restored: %q", got)
 	}
 }
+
+func TestShortenReplacesTheHomePrefixOfPaths(t *testing.T) {
+	home, err := userhome.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sep := string(filepath.Separator)
+	cases := []struct{ in, want string }{
+		{home + sep + "snap.jpg", "~" + sep + "snap.jpg"},
+		{"opened " + home + " now", "opened ~ now"},
+		{"a " + home + sep + "x and " + home + sep + "y", "a ~" + sep + "x and ~" + sep + "y"},
+		{home + "2" + sep + "other", home + "2" + sep + "other"},
+		{"no path here", "no path here"},
+	}
+	for _, tc := range cases {
+		if got := userhome.Shorten(tc.in); got != tc.want {
+			t.Errorf("Shorten(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

@@ -4,44 +4,54 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/sairaph/mcp-wizard/app"
-	"github.com/sairaph/mcp-wizard/app/table"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/sairaph/creality-k2-mcp/internal/daemon"
 	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/tui/frame"
+	"github.com/sairaph/creality-k2-mcp/internal/userhome"
 )
 
-type recordingsMode int
-
+// Terminal widths at which the recordings table gains or loses columns.
 const (
-	recordingsModeNormal recordingsMode = iota
-	recordingsModeConfirmDelete
+	recordingsIDMinWidth   = 120 // the ID column is shown from here
+	recordingsFullMinWidth = 80  // SIZE and STATUS are shown from here
 )
 
 // recordingsScreen lists every recording the background daemon knows about
-// (active and completed), with size, duration and parts, and lets the user
-// open a recording's containing folder or delete it
+// (active and completed), newest first, with duration, size and parts, and lets
+// the user open a recording's containing folder or delete it
 // (dev_docs/plan-v0.1.0.md's "TUI and CLI" section). Every action goes
 // through Deps.Daemon and Deps.OpenFolder, both injected so a test never
 // starts the real daemon or opens a real file manager window (AGENTS.md
 // hard testing rule, task instructions).
 type recordingsScreen struct {
-	recordings []daemon.RecordingInfo
-	names      map[string]string // printer id -> name, for display only
-	table      *table.Model
-	loadErr    string
+	ctx  context.Context
+	deps Deps
 
-	mode       recordingsMode
+	loaded     bool
+	loadErr    string
+	recordings []daemon.RecordingInfo // newest first
+	names      map[string]string      // printer id -> name, for display only
+
+	list       selectList
+	confirming bool
 	confirmYes bool
 
 	message string
+	msgKind resultKind
+	spin    spinner
+	lastH   int
 }
 
-func newRecordingsScreen() *recordingsScreen { return &recordingsScreen{} }
+func newRecordingsScreen(ctx context.Context, deps Deps) *recordingsScreen {
+	return &recordingsScreen{ctx: ctx, deps: deps, spin: newSpinner()}
+}
 
 type recordingsLoadedMsg struct {
 	recordings []daemon.RecordingInfo
@@ -55,13 +65,12 @@ type recordingsActionMsg struct {
 	deleted bool
 }
 
-func (s *recordingsScreen) Init(ctx context.Context, deps Deps) tea.Cmd {
-	return s.loadCmd(ctx, deps)
+func (s *recordingsScreen) Init() tea.Cmd {
+	return tea.Batch(s.loadCmd(), s.spin.ensure(true))
 }
 
-func (s *recordingsScreen) loadCmd(ctx context.Context, deps Deps) tea.Cmd {
-	dir := deps.Dir
-	daemonClient := deps.Daemon
+func (s *recordingsScreen) loadCmd() tea.Cmd {
+	ctx, dir, daemonClient := s.ctx, s.deps.Dir, s.deps.Daemon
 	return func() tea.Msg {
 		names := map[string]string{}
 		if reg, _, _, err := domain.LoadRegistry(dir); err == nil {
@@ -70,7 +79,7 @@ func (s *recordingsScreen) loadCmd(ctx context.Context, deps Deps) tea.Cmd {
 			}
 		}
 		if daemonClient == nil {
-			return recordingsLoadedMsg{err: fmt.Errorf("the camera daemon is not available")}
+			return recordingsLoadedMsg{err: errDaemonUnavailable}
 		}
 		res, err := daemonClient.ListRecordings(ctx)
 		if err != nil {
@@ -80,161 +89,108 @@ func (s *recordingsScreen) loadCmd(ctx context.Context, deps Deps) tea.Cmd {
 	}
 }
 
-func (s *recordingsScreen) buildTable() {
-	cols := []table.Column{
-		{Name: "ID", Width: 22},
-		{Name: "PRINTER", Width: 16},
-		{Name: "MODE", Width: 9},
-		{Name: "ACTIVE", Width: 6},
-		{Name: "STARTED", Width: 19},
-		{Name: "DURATION", Width: 9},
-		{Name: "SIZE", Width: 9},
-	}
-	rows := make([]table.Row, len(s.recordings))
-	for i, r := range s.recordings {
-		name := s.names[r.PrinterID]
-		if name == "" {
-			name = r.PrinterID
-		}
-		active := "no"
-		if r.Active {
-			active = "yes"
-		}
-		rows[i] = table.Row{
-			r.ID, name, string(r.Mode), active,
-			r.StartedAt.Format("2006-01-02 15:04:05"),
-			formatRecordingDuration(r.DurationSeconds),
-			formatBytes(r.Bytes),
-		}
-	}
-	s.table = table.New("Recordings", cols, rows)
-}
-
-// selectedRecording looks up the recording backing the table's currently
-// highlighted row by ID (the table's first column) rather than by
-// s.table.Cursor's raw index into s.recordings, so this stays correct after
-// the table's own "s" sort key has reordered its rows.
-func (s *recordingsScreen) selectedRecording() *daemon.RecordingInfo {
-	if s.table == nil || s.table.Cursor < 0 || s.table.Cursor >= len(s.table.Rows) {
+func (s *recordingsScreen) selected() *daemon.RecordingInfo {
+	if s.list.cursor < 0 || s.list.cursor >= len(s.recordings) {
 		return nil
 	}
-	id := s.table.Rows[s.table.Cursor][0]
-	for i := range s.recordings {
-		if s.recordings[i].ID == id {
-			return &s.recordings[i]
-		}
-	}
-	return nil
+	return &s.recordings[s.list.cursor]
 }
 
-func (s *recordingsScreen) Update(ctx context.Context, deps Deps, msg tea.Msg) tea.Cmd {
+func (s *recordingsScreen) Update(msg tea.Msg) (tea.Cmd, Nav) {
+	cmd := s.update(msg)
+	return tea.Batch(cmd, s.spin.ensure(!s.loaded && s.loadErr == "")), NavNone
+}
+
+func (s *recordingsScreen) update(msg tea.Msg) tea.Cmd {
+	if handled, cmd := s.spin.update(msg, !s.loaded && s.loadErr == ""); handled {
+		return cmd
+	}
 	switch m := msg.(type) {
 	case recordingsLoadedMsg:
 		if m.err != nil {
 			s.loadErr = m.err.Error()
 			return nil
 		}
-		s.loadErr = ""
-		s.recordings = m.recordings
-		s.names = m.names
-		s.buildTable()
+		s.loadErr, s.loaded = "", true
+		s.recordings, s.names = m.recordings, m.names
+		sort.SliceStable(s.recordings, func(i, j int) bool {
+			return s.recordings[i].StartedAt.After(s.recordings[j].StartedAt)
+		})
+		s.list.clamp(len(s.recordings))
 		return nil
 
 	case recordingsActionMsg:
 		if m.err != nil {
-			s.message = m.err.Error()
+			s.message, s.msgKind = m.err.Error(), resultError
 			return nil
 		}
-		s.message = m.text
+		s.message, s.msgKind = m.text, resultOK
 		if m.deleted {
-			return s.loadCmd(ctx, deps)
-		}
-		return nil
-
-	case app.ActionMsg:
-		if m.Source != "table" {
-			return nil
-		}
-		switch m.Value {
-		case "back":
-			return app.Action("recordings", "back")
-		case "select":
-			return s.openFolderCmd(deps)
+			return s.loadCmd()
 		}
 		return nil
 
 	case tea.KeyMsg:
-		if s.mode == recordingsModeConfirmDelete {
-			return s.updateConfirmDelete(ctx, deps, m)
+		if s.confirming {
+			return s.confirmKey(m)
 		}
 		switch m.String() {
-		case "q":
-			return app.Action("recordings", "back")
 		case "r":
 			s.message = ""
-			return s.loadCmd(ctx, deps)
-		case "o":
-			return s.openFolderCmd(deps)
+			s.loaded, s.loadErr = false, ""
+			return s.loadCmd()
+		case "enter":
+			return s.openFolderCmd()
 		case "d":
-			if s.selectedRecording() == nil {
-				return nil
+			if s.selected() != nil {
+				s.confirming, s.confirmYes = true, false
 			}
-			s.mode = recordingsModeConfirmDelete
-			s.confirmYes = false
 			return nil
 		}
-		if s.table != nil {
-			return s.table.Update(msg)
+		if s.loaded {
+			s.list.key(m, len(s.recordings), max(s.lastH-1, 1))
 		}
 	}
 	return nil
 }
 
-func (s *recordingsScreen) openFolderCmd(deps Deps) tea.Cmd {
-	rec := s.selectedRecording()
+func (s *recordingsScreen) openFolderCmd() tea.Cmd {
+	rec := s.selected()
 	if rec == nil || len(rec.Parts) == 0 {
-		s.message = "nothing to open"
+		s.message, s.msgKind = "Nothing to open.", resultError
 		return nil
 	}
 	dir := filepath.Dir(rec.Parts[0].Path)
-	opener := deps.OpenFolder
+	opener := s.deps.OpenFolder
 	return func() tea.Msg {
 		if err := opener(dir); err != nil {
-			return recordingsActionMsg{err: fmt.Errorf("open %s: %w", dir, err)}
+			return recordingsActionMsg{err: fmt.Errorf("open %s: %w", userhome.Shorten(dir), err)}
 		}
-		return recordingsActionMsg{text: "Opened " + dir}
+		return recordingsActionMsg{text: "Opened " + userhome.Shorten(dir)}
 	}
 }
 
-func (s *recordingsScreen) updateConfirmDelete(ctx context.Context, deps Deps, m tea.KeyMsg) tea.Cmd {
-	switch m.String() {
-	case "up", "down", "k", "j", "tab", "left", "right", "h", "l":
-		s.confirmYes = !s.confirmYes
-	case "esc", "n", "q", "ctrl+c":
-		s.mode = recordingsModeNormal
-	case "y":
-		return s.deleteCmd(ctx, deps)
-	case "enter":
-		if !s.confirmYes {
-			s.mode = recordingsModeNormal
-			return nil
-		}
-		return s.deleteCmd(ctx, deps)
+func (s *recordingsScreen) confirmKey(m tea.KeyMsg) tea.Cmd {
+	switch confirmKey(m, &s.confirmYes) {
+	case confirmYes:
+		return s.deleteCmd()
+	case confirmNo:
+		s.confirming = false
 	}
 	return nil
 }
 
-func (s *recordingsScreen) deleteCmd(ctx context.Context, deps Deps) tea.Cmd {
-	s.mode = recordingsModeNormal
-	rec := s.selectedRecording()
+func (s *recordingsScreen) deleteCmd() tea.Cmd {
+	s.confirming = false
+	rec := s.selected()
 	if rec == nil {
 		return nil
 	}
 	id := rec.ID
-	daemonClient := deps.Daemon
+	ctx, daemonClient := s.ctx, s.deps.Daemon
 	return func() tea.Msg {
 		if daemonClient == nil {
-			return recordingsActionMsg{err: fmt.Errorf("the camera daemon is not available")}
+			return recordingsActionMsg{err: errDaemonUnavailable}
 		}
 		if err := daemonClient.DeleteRecording(ctx, id); err != nil {
 			return recordingsActionMsg{err: fmt.Errorf("delete %s: %w", id, err)}
@@ -243,34 +199,144 @@ func (s *recordingsScreen) deleteCmd(ctx context.Context, deps Deps) tea.Cmd {
 	}
 }
 
-func (s *recordingsScreen) View() string {
-	if s.loadErr != "" {
-		return tuiStyleTitle.Render("  Recordings") + "\n\n  " + tuiStyleError.Render(s.loadErr) +
-			"\n\n" + tuiStyleDim.Render("  r retry · q back")
+func (s *recordingsScreen) Back() bool {
+	if s.confirming {
+		s.confirming = false
+		return true
 	}
-	if s.table == nil {
-		return tuiStyleTitle.Render("  Recordings") + "\n\n  " + tuiStyleDim.Render("Loading recordings...")
+	return false
+}
+
+func (s *recordingsScreen) Mode() Mode {
+	if s.confirming {
+		return ModeModal
 	}
-	if s.mode == recordingsModeConfirmDelete {
-		rec := s.selectedRecording()
+	return ModeNormal
+}
+
+func (s *recordingsScreen) Header() frame.Header { return frame.Header{Name: "Recordings"} }
+
+func (s *recordingsScreen) Hints(w, h int) []frame.Hint {
+	switch {
+	case s.confirming:
+		return confirmHints()
+	case s.loadErr != "":
+		return []frame.Hint{{Keys: "r", Label: "retry", Priority: 80}, frame.Back(), frame.Quit()}
+	case !s.loaded:
+		return []frame.Hint{frame.Back(), frame.Quit()}
+	}
+	out := []frame.Hint{{Keys: "r", Label: "refresh", Priority: 30}}
+	if len(s.recordings) > 0 {
+		out = []frame.Hint{
+			{Keys: "↑↓", Label: "move", Priority: 70},
+			{Keys: "enter", Label: "open folder", Priority: 80},
+			{Keys: "d", Label: "delete", Priority: 60},
+			{Keys: "r", Label: "refresh", Priority: 30},
+		}
+	}
+	return append(out, frame.Back(), frame.Quit())
+}
+
+// recordingsColumns is the fixed column set for a terminal width: everything
+// from 120 columns, no ID from 80, and under 80 no SIZE and STATUS.
+func recordingsColumns(w int) []string {
+	cols := []string{"STARTED", "PRINTER", "MODE", "DURATION"}
+	if w >= recordingsFullMinWidth {
+		cols = append(cols, "SIZE", "STATUS")
+	}
+	if w >= recordingsIDMinWidth {
+		cols = append(cols, "ID")
+	}
+	return cols
+}
+
+var recordingsColumnWidths = map[string]int{
+	"STARTED": 16, "PRINTER": 16, "MODE": 9, "DURATION": 9, "SIZE": 9, "STATUS": 9, "ID": 22,
+}
+
+func (s *recordingsScreen) cell(r daemon.RecordingInfo, col string) string {
+	switch col {
+	case "STARTED":
+		return r.StartedAt.Local().Format("2006-01-02 15:04")
+	case "PRINTER":
+		if name := s.names[r.PrinterID]; name != "" {
+			return name
+		}
+		return r.PrinterID
+	case "MODE":
+		return string(r.Mode)
+	case "DURATION":
+		return formatRecordingDuration(r.DurationSeconds)
+	case "SIZE":
+		return formatBytes(r.Bytes)
+	case "STATUS":
+		if r.Active {
+			return "recording"
+		}
+		return "done"
+	}
+	return r.ID
+}
+
+func fixedCell(text string, width int) string {
+	return frame.Pad(ansi.Truncate(text, width, ""), width)
+}
+
+func (s *recordingsScreen) Body(w, h int) []string {
+	s.lastH = h
+	switch {
+	case s.loadErr != "":
+		return wrapStyled(w, styleError, s.loadErr)
+	case !s.loaded:
+		return []string{frame.Gutter + s.spin.glyph() + " Reading recordings..."}
+	case s.confirming:
 		id := ""
-		if rec != nil {
+		if rec := s.selected(); rec != nil {
 			id = rec.ID
 		}
-		var b strings.Builder
-		b.WriteString(tuiStyleTitle.Render("  Recordings") + "\n\n")
-		b.WriteString("  " + tuiStyleWarn.Render("Delete recording "+id+"?") + "\n\n")
-		b.WriteString("  " + tuiStyleDim.Render("This permanently deletes its files from disk.") + "\n\n")
-		b.WriteString(tuiConfirmChoiceLines(s.confirmYes, "Delete", "Cancel"))
-		return b.String()
+		return confirmBody(w, "Delete recording "+id+"?", "This permanently deletes its files from disk.",
+			s.confirmYes, "Delete", "Cancel")
+	case len(s.recordings) == 0:
+		out := frame.Wrap(w, frame.Gutter, "No recordings yet. Start one in Camera, or ask the AI to record a print.")
+		return append(out, s.messageLines(w)...)
 	}
 
-	out := s.table.View()
-	out += "\n" + tuiStyleDim.Render("  o open folder · d delete · r refresh · q back")
-	if s.message != "" {
-		out += "\n  " + s.message
+	cols := recordingsColumns(w)
+	var head []string
+	for _, c := range cols {
+		head = append(head, fixedCell(c, recordingsColumnWidths[c]))
 	}
-	return out
+	out := []string{frame.Gutter + "  " + styleDim.Render(strings.TrimRight(strings.Join(head, " "), " "))}
+
+	msg := s.messageLines(w)
+	capacity := h - len(out) - len(msg)
+	from, to := s.list.window(len(s.recordings), capacity)
+	for i := from; i < to; i++ {
+		r := s.recordings[i]
+		var cells []string
+		for _, c := range cols {
+			cell := fixedCell(s.cell(r, c), recordingsColumnWidths[c])
+			if c == "STATUS" && r.Active {
+				cell = styleWarn.Render(cell)
+			}
+			cells = append(cells, cell)
+		}
+		out = append(out, frame.Marker(i == s.list.cursor)+strings.TrimRight(strings.Join(cells, " "), " "))
+	}
+	return append(out, msg...)
+}
+
+// messageLines is the result of the last action under the table, with a blank
+// row above it, or nothing.
+func (s *recordingsScreen) messageLines(w int) []string {
+	if s.message == "" {
+		return nil
+	}
+	style := styleOK
+	if s.msgKind == resultError {
+		style = styleError
+	}
+	return append([]string{""}, wrapStyled(w, style, s.message)...)
 }
 
 func formatRecordingDuration(seconds float64) string {

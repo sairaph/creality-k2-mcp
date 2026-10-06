@@ -19,12 +19,25 @@ type settingsTestState struct {
 func settingsTestStateFn(s *settingsTestState) *SettingsState { return &s.Settings }
 
 func newSettingsStep() *settingsStep[settingsTestState] {
-	return &settingsStep[settingsTestState]{stateFn: settingsTestStateFn}
+	return &settingsStep[settingsTestState]{stateFn: settingsTestStateFn, chrome: newChrome("", false)}
 }
 
 func newDryRunSettingsStep() *settingsStep[settingsTestState] {
-	return &settingsStep[settingsTestState]{stateFn: settingsTestStateFn, opts: SettingsStepOptions{DryRun: true}}
+	return &settingsStep[settingsTestState]{stateFn: settingsTestStateFn, opts: SettingsStepOptions{DryRun: true}, chrome: newChrome("", true)}
 }
+
+// readySettingsState is a loaded step state holding the default settings.
+func readySettingsState() *settingsTestState {
+	st := &settingsTestState{}
+	st.Width, st.Height = 120, 36
+	st.Settings.Ready = true
+	st.Settings.Form.Load(domain.DefaultSettings())
+	st.Settings.Form.EnterLabel = "continue"
+	return st
+}
+
+func keyRune(r rune) tea.KeyMsg        { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+func keyType(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
 func TestSettingsStepIDAndTitle(t *testing.T) {
 	s := newSettingsStep()
@@ -57,175 +70,85 @@ func TestSettingsStepInitLoadsDefaults(t *testing.T) {
 	if !st.Settings.Ready {
 		t.Error("Ready should be true after settingsLoadedMsg")
 	}
-	if st.Settings.Settings.Tools.Preset != domain.PresetCamera {
-		t.Errorf("default preset = %q, want %q (sensible default preselected)", st.Settings.Settings.Tools.Preset, domain.PresetCamera)
+	got := st.Settings.Form.Values()
+	if got.Tools.Preset != domain.PresetCamera {
+		t.Errorf("default preset = %q, want %q (sensible default preselected)", got.Tools.Preset, domain.PresetCamera)
 	}
-	if st.Settings.Settings.IdleHeatMinutes != 15 {
-		t.Errorf("default idle_heat_minutes = %d, want 15", st.Settings.Settings.IdleHeatMinutes)
+	if got.IdleHeatMinutes != 15 {
+		t.Errorf("default idle_heat_minutes = %d, want 15", got.IdleHeatMinutes)
 	}
 	if _, err := os.Stat(loaded.path); !os.IsNotExist(err) {
 		t.Errorf("Init must never create %s on its own, stat err = %v", loaded.path, err)
 	}
 }
 
-func TestSettingsStepEditNumericField(t *testing.T) {
+// The step edits through the shared settingsform.Form: the number editor, its
+// validation and the preset cycling are exercised in that package's own tests;
+// here one pass proves the step passes keys to it and renders its body.
+func TestSettingsStepDelegatesEditingToTheSharedForm(t *testing.T) {
 	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
-	st.Settings.Cursor = 1 // idle_heat_minutes
+	st := readySettingsState()
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")}, st) // start editing
-	if !st.Settings.Editing {
-		t.Fatal("e should start editing the selected row")
+	s.Update(keyType(tea.KeyDown), st) // idle_heat_minutes
+	s.Update(keyRune('4'), st)
+	s.Update(keyRune('0'), st)
+	if !st.Settings.Form.Typing() {
+		t.Fatal("typing a number should open the shared form's editor")
 	}
-	if st.Settings.Input != "15" {
-		t.Fatalf("Input = %q, want the current value %q", st.Settings.Input, "15")
+	s.Update(keyType(tea.KeyEnter), st) // confirm the edit, not a save
+	if st.Settings.Form.Typing() || st.Settings.Saving {
+		t.Fatalf("typing=%v saving=%v, want the edit confirmed without saving", st.Settings.Form.Typing(), st.Settings.Saving)
 	}
-
-	// Replace the value with 30.
-	st.Settings.Input = ""
-	for _, r := range "30" {
-		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}, st)
+	if got := st.Settings.Form.Values().IdleHeatMinutes; got != 40 {
+		t.Fatalf("IdleHeatMinutes = %d, want 40", got)
 	}
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st) // confirm
-	if st.Settings.Editing {
-		t.Error("Editing should be false after confirming a valid value")
-	}
-	if st.Settings.Settings.IdleHeatMinutes != 30 {
-		t.Errorf("IdleHeatMinutes = %d, want 30", st.Settings.Settings.IdleHeatMinutes)
-	}
-}
-
-func TestSettingsStepRejectsInvalidNumericField(t *testing.T) {
-	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
-	st.Settings.Cursor = 1 // idle_heat_minutes
-	st.Settings.Editing = true
-	st.Settings.Input = "not a number"
-
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st)
-	if !st.Settings.Editing {
-		t.Error("an invalid value should keep the field open for editing")
-	}
-	if st.Settings.Message == "" {
-		t.Error("an invalid value should leave a message explaining why")
-	}
-	if st.Settings.Settings.IdleHeatMinutes == 0 {
-		// sanity: default is nonzero and must be untouched
-		t.Error("the invalid edit must not have been applied")
-	}
-}
-
-func TestSettingsStepRejectsOutOfRangeBand(t *testing.T) {
-	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
-	st.Settings.Cursor = 2 // nozzle_band_c
-	st.Settings.Editing = true
-	st.Settings.Input = "500" // out of domain.validateBands' 0-100 range
-
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st)
-	if !st.Settings.Editing {
-		t.Error("an out-of-range band should keep the field open for editing")
-	}
-	if st.Settings.Settings.Bands.NozzleBandC == 500 {
-		t.Error("an out-of-range band must never be applied")
-	}
-}
-
-// The preset is drawn as "< camera >" and changes in place with left/right
-// (and space), with no edit mode, and the footer says so.
-func TestSettingsStepPresetChangesInPlace(t *testing.T) {
-	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings() // camera
-	st.Settings.Cursor = 0                          // preset row
 
 	view := s.View(st)
-	if !strings.Contains(view, "< camera >") || !strings.Contains(view, "←→ change") {
-		t.Errorf("preset row should read < camera > with a ←→ change hint:\n%s", view)
-	}
-	var hinted bool
-	for _, h := range s.Hints(st) {
-		if h.Key == "←→" {
-			hinted = true
+	for _, want := range []string{"Tool preset", "< camera >", "Idle heat timeout", "40"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("View output missing %q:\n%s", want, view)
 		}
 	}
-	if !hinted {
-		t.Error("Hints() should include ←→ on the preset row")
-	}
+}
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRight}, st)
-	if st.Settings.Editing {
-		t.Fatal("changing the preset must not open an edit mode")
+func TestSettingsStepQIsACharacterWhileTyping(t *testing.T) {
+	s := newSettingsStep()
+	st := readySettingsState()
+	s.Update(keyType(tea.KeyDown), st)
+	s.Update(keyRune('e'), st)
+
+	if d, _ := s.Update(keyRune('q'), st); d != flow.Continue {
+		t.Fatalf("q while typing gave directive %v, want Continue (it is a character)", d)
 	}
-	if got := st.Settings.Settings.Tools.Preset; got != domain.PresetControl {
-		t.Fatalf("after right: %q, want %q", got, domain.PresetControl)
+	if d, _ := s.Update(keyType(tea.KeyEsc), st); d != flow.Continue || st.Settings.Form.Typing() {
+		t.Fatalf("esc while typing gave directive %v typing=%v, want the field cancelled", d, st.Settings.Form.Typing())
 	}
-	s.Update(tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}, st) // wraps to monitor
-	if got := st.Settings.Settings.Tools.Preset; got != domain.PresetMonitor {
-		t.Fatalf("after space: %q, want %q", got, domain.PresetMonitor)
-	}
-	s.Update(tea.KeyMsg{Type: tea.KeyLeft}, st) // wraps back to control
-	if got := st.Settings.Settings.Tools.Preset; got != domain.PresetControl {
-		t.Fatalf("after left: %q, want %q", got, domain.PresetControl)
+	if d, _ := s.Update(keyRune('q'), st); d != flow.Quit {
+		t.Errorf("q on the list gave directive %v, want Quit", d)
 	}
 }
 
-// A numeric row is edited with e (starting from the current value) or by
-// just typing a number (replacing it).
-func TestSettingsStepTypingStartsNumericEdit(t *testing.T) {
+func TestSettingsStepHintsFollowTheForm(t *testing.T) {
 	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
-	st.Settings.Cursor = 2 // nozzle_band_c
+	st := readySettingsState()
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("8")}, st)
-	if !st.Settings.Editing || st.Settings.Input != "8" {
-		t.Fatalf("typing 8 should start editing with input 8, got editing=%v input=%q", st.Settings.Editing, st.Settings.Input)
+	var keys []string
+	for _, h := range s.Hints(st) {
+		keys = append(keys, h.Key+" "+h.Label)
 	}
-	s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st)
-	if st.Settings.Editing || st.Settings.Settings.Bands.NozzleBandC != 8 {
-		t.Fatalf("enter should confirm 8, got editing=%v band=%v", st.Settings.Editing, st.Settings.Settings.Bands.NozzleBandC)
+	joined := strings.Join(keys, "|")
+	for _, want := range []string{"←→ change", "enter continue", "esc back", "q cancel"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("hints %q missing %q", joined, want)
+		}
 	}
 
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")}, st)
-	if !st.Settings.Editing || st.Settings.Input != "8" {
-		t.Fatalf("e should edit the current value, got editing=%v input=%q", st.Settings.Editing, st.Settings.Input)
-	}
-}
-
-// The highlighted row's help is always shown, so what a band means is on
-// screen without opening anything.
-func TestSettingsStepViewExplainsHighlightedRow(t *testing.T) {
-	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
-	st.Settings.Cursor = 2 // nozzle_band_c
-
-	if view := s.View(st); !strings.Contains(view, "your gcode is never limited") {
-		t.Errorf("View should explain the highlighted band:\n%s", view)
-	}
-}
-
-func TestSettingsStepRestoreDefaults(t *testing.T) {
-	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
-	st.Settings.Settings.IdleHeatMinutes = 99
-	st.Settings.Settings.Tools.Preset = domain.PresetControl
-
-	s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")}, st)
-	if st.Settings.Settings.IdleHeatMinutes != 15 || st.Settings.Settings.Tools.Preset != domain.PresetCamera {
-		t.Errorf("restore defaults did not reset to domain.DefaultSettings(): %+v", st.Settings.Settings)
+	s.Update(keyType(tea.KeyDown), st)
+	s.Update(keyRune('e'), st)
+	for _, h := range s.Hints(st) {
+		if h.Key == "q" {
+			t.Error("q must not be a hint while a field is being typed in")
+		}
 	}
 }
 
@@ -242,11 +165,12 @@ func TestSettingsStepSaveAdvancesAndPersists(t *testing.T) {
 	s := newSettingsStep()
 	st := &settingsTestState{}
 	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
-	st.Settings.Settings.IdleHeatMinutes = 42
+	cfg := domain.DefaultSettings()
+	cfg.IdleHeatMinutes = 42
+	st.Settings.Form.Load(cfg)
 	st.Settings.Path = path
 
-	directive, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st)
+	directive, cmd := s.Update(keyType(tea.KeyEnter), st)
 	if directive != flow.Continue {
 		t.Fatalf("directive = %v, want Continue (the save runs as a tea.Cmd)", directive)
 	}
@@ -257,8 +181,14 @@ func TestSettingsStepSaveAdvancesAndPersists(t *testing.T) {
 		t.Error("Saving should be true while the save cmd is in flight")
 	}
 	// While saving, keys other than ctrl+c are ignored.
-	if d, c := s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")}, st); d != flow.Continue || c != nil {
+	if d, c := s.Update(keyRune('r'), st); d != flow.Continue || c != nil {
 		t.Error("keys must be ignored while Saving")
+	}
+	if d, _ := s.Update(keyRune('q'), st); d != flow.Continue {
+		t.Error("q must not cancel a write in flight")
+	}
+	if d, _ := s.Update(keyType(tea.KeyCtrlC), st); d != flow.Quit {
+		t.Error("ctrl+c must still quit while saving")
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Fatal("the file must not exist before the save cmd has run")
@@ -275,16 +205,13 @@ func TestSettingsStepSaveAdvancesAndPersists(t *testing.T) {
 
 	directive, cmd = s.Update(saved, st)
 	if directive != flow.Next {
-		t.Fatalf("directive after settingsSavedMsg = %v, want Next", directive)
+		t.Fatalf("directive after settingsSavedMsg = %v, want Next (enter continues in the wizard)", directive)
 	}
 	if cmd != nil {
 		t.Error("handling settingsSavedMsg should not chain another command")
 	}
 	if st.Settings.Saving {
 		t.Error("Saving should be false once settingsSavedMsg is handled")
-	}
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("expected settings file to exist: %v", err)
 	}
 	onDisk, err := domain.LoadSettings(path)
 	if err != nil {
@@ -306,14 +233,15 @@ func TestSettingsStepDryRunNeverWrites(t *testing.T) {
 	}
 
 	s := newDryRunSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
+	st := readySettingsState()
 	st.Settings.Path = path
 
-	_, cmd := s.Update(tea.KeyMsg{Type: tea.KeyEnter}, st)
+	_, cmd := s.Update(keyType(tea.KeyEnter), st)
 	if cmd == nil {
 		t.Fatal("expected a non-nil save cmd")
+	}
+	if view := s.View(st); !strings.Contains(view, "Computing what would be written...") {
+		t.Errorf("a dry-run save should say what it is doing:\n%s", view)
 	}
 	msg := cmd()
 	saved, ok := msg.(settingsSavedMsg)
@@ -331,9 +259,6 @@ func TestSettingsStepDryRunNeverWrites(t *testing.T) {
 	if directive != flow.Next {
 		t.Fatalf("directive after dry-run save = %v, want Next", directive)
 	}
-	if st.Settings.Message == "" {
-		t.Error("dry-run should leave a message describing what would be written")
-	}
 
 	entries, err := os.ReadDir(home)
 	if err != nil {
@@ -344,27 +269,26 @@ func TestSettingsStepDryRunNeverWrites(t *testing.T) {
 	}
 }
 
-func TestSettingsStepEscGoesBack(t *testing.T) {
+func TestSettingsStepSaveErrorStaysOnTheStep(t *testing.T) {
 	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
+	st := readySettingsState()
+	st.Settings.Saving = true
 
-	directive, _ := s.Update(tea.KeyMsg{Type: tea.KeyEsc}, st)
-	if directive != flow.Back {
-		t.Errorf("directive = %v, want Back", directive)
+	directive, _ := s.Update(settingsSavedMsg{err: os.ErrPermission}, st)
+	if directive != flow.Continue || st.Settings.Saving {
+		t.Fatalf("directive=%v saving=%v, want the step kept with the save finished", directive, st.Settings.Saving)
+	}
+	if !strings.Contains(s.View(st), os.ErrPermission.Error()) {
+		t.Errorf("the failure should be shown:\n%s", s.View(st))
 	}
 }
 
-func TestSettingsStepViewShowsRowsAndValues(t *testing.T) {
+func TestSettingsStepEscGoesBack(t *testing.T) {
 	s := newSettingsStep()
-	st := &settingsTestState{}
-	st.Settings.Ready = true
-	st.Settings.Settings = domain.DefaultSettings()
+	st := readySettingsState()
 
-	out := s.View(st)
-	for _, want := range []string{"Tool preset", "camera", "Idle heat timeout", "15"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("View output missing %q:\n%s", want, out)
-		}
+	directive, _ := s.Update(keyType(tea.KeyEsc), st)
+	if directive != flow.Back {
+		t.Errorf("directive = %v, want Back", directive)
 	}
 }

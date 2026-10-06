@@ -30,6 +30,7 @@ func newPrintersStep(discover DiscoverFunc, probe ProbeFunc) *printersStep[print
 	return &printersStep[printersTestState]{
 		stateFn: printersTestStateFn,
 		opts:    PrintersStepOptions{Discover: discover, Probe: probe},
+		chrome:  newChrome("", false),
 		ctx:     context.Background(),
 	}
 }
@@ -73,8 +74,8 @@ func TestPrintersStepIDAndTitle(t *testing.T) {
 		t.Errorf("ID() = %q, want %q", s.ID(), "printers")
 	}
 	st := &printersTestState{}
-	if !strings.Contains(s.Title(st), "Printers") {
-		t.Errorf("Title() = %q, want it to mention Printers", s.Title(st))
+	if !strings.Contains(s.Title(st), "printers") {
+		t.Errorf("Title() = %q, want the question about printers", s.Title(st))
 	}
 
 	proj := newPrintersStep(nil, nil)
@@ -459,6 +460,7 @@ func TestPrintersStepDryRunNeverWrites(t *testing.T) {
 func TestPrintersStepViewShowsReasonForNotAddable(t *testing.T) {
 	s := newPrintersStep(nil, nil)
 	st := &printersTestState{}
+	st.Width, st.Height = 120, 36
 	st.Printers.Ready = true
 	st.Printers.Rows = []PrinterRow{
 		{Printer: domain.Printer{Name: "192.168.1.30", Host: "192.168.1.30"}, Addable: false, Reason: "not a Creality K2"},
@@ -472,6 +474,7 @@ func TestPrintersStepViewShowsReasonForNotAddable(t *testing.T) {
 func TestPrintersStepViewShowsManualAddPrompt(t *testing.T) {
 	s := newPrintersStep(nil, nil)
 	st := &printersTestState{}
+	st.Width, st.Height = 120, 36
 	st.Printers.Ready = true
 	st.Printers.Adding = true
 	st.Printers.Input = "192.168"

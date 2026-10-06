@@ -47,14 +47,16 @@ on your `PATH` and starts the setup wizard, which:
    limits for changes during a print;
 3. finds the AI clients on your machine (Claude Desktop, Claude Code, Codex,
    Cursor, VS Code and more) and lets you pick the ones to register with;
-4. writes the printer list, the settings and each selected client's entry.
+4. registers the server with the clients you picked and shows what changed and
+   what to do next.
 
-Nothing is written until step 4, so cancelling earlier leaves your machine as it
-was. Restart your AI client afterwards. Run `creality-k2-mcp doctor` at any time
-to check the installation, and `creality-k2-mcp update` to update to the latest
-release (then restart your AI client). See the
-[installation guide](docs/installation.md) for unattended installs and
-troubleshooting.
+Steps 1 and 2 save when you press enter; no AI client is changed before step 4,
+so cancelling earlier leaves your clients as they were. Restart your AI client
+afterwards. Run `creality-k2-mcp` with no arguments to open the terminal app,
+`creality-k2-mcp doctor` at any time to check the installation, and
+`creality-k2-mcp update` to update to the latest release (then restart your AI
+client). See the [installation guide](docs/installation.md) for unattended
+installs and troubleshooting.
 
 ## Safety in brief
 

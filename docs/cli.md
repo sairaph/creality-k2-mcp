@@ -51,11 +51,14 @@ install). The wizard has these steps in order:
 3. **Client selection** - pick which AI clients on this machine to register
    the server with (Claude Desktop, Claude Code, Cursor, VS Code, Windsurf,
    Zed, and more; the clients found on this machine are pre-checked).
-4. **Apply** - writes the registry and settings files, then registers the
-   server in each selected client's own config, idempotently (existing
-   entries and other servers are preserved).
+4. **Registration** - registers the server in each selected client's own
+   config, idempotently (existing entries and other servers are preserved),
+   then shows a summary and the next step; the same summary is printed to the
+   terminal after the wizard closes.
 
-Nothing is written to disk before the Apply step runs.
+The Printers step saves the registry and the Settings step saves `config.toml`
+when you press enter on them; no AI client is changed before step 4. With
+`--dry-run` nothing is written at any step.
 
 ```sh
 creality-k2-mcp install
