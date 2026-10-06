@@ -25,11 +25,12 @@ on your `PATH` and starts the install wizard:
 3. **Client selection** - the AI clients on this machine to register with
    (Claude Desktop, Claude Code, Codex, Cursor, VS Code, Windsurf, Zed and more;
    the clients found on this machine are pre-checked).
-4. **Apply** - writes the printer registry, the settings and each selected
-   client's configuration.
+4. **Registration** - registers the server in each selected client's
+   configuration, then shows what changed and what to do next.
 
-Nothing is written until step 4, so cancelling earlier leaves your machine as it
-was. Restart your AI client afterwards.
+The Printers and Settings steps save when you press enter on them; no AI client
+is changed before step 4, so cancelling earlier leaves your clients as they were
+(the wizard says what it kept). Restart your AI client afterwards.
 
 Already have the binary? Run `creality-k2-mcp install`. For a project-scoped
 install (registry and client configuration in the current directory), use

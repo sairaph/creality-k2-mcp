@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/sairaph/mcp-wizard/cli"
 	"github.com/sairaph/mcp-wizard/command"
 	"github.com/sairaph/mcp-wizard/doctor"
@@ -24,7 +24,7 @@ import (
 	"github.com/sairaph/creality-k2-mcp/internal/clicmd"
 	"github.com/sairaph/creality-k2-mcp/internal/daemon"
 	daemonclient "github.com/sairaph/creality-k2-mcp/internal/daemon/client"
-	"github.com/sairaph/creality-k2-mcp/internal/doctorchecks"
+	"github.com/sairaph/creality-k2-mcp/internal/doctorlist"
 	"github.com/sairaph/creality-k2-mcp/internal/domain"
 	"github.com/sairaph/creality-k2-mcp/internal/mcpserver"
 	internaltui "github.com/sairaph/creality-k2-mcp/internal/tui"
@@ -312,21 +312,40 @@ func runAdd(ctx context.Context, cmd cli.Command) int {
 	return runUnattended(ctx, detector, scope, cmd, harness.Present)
 }
 
-// runWizard drives the interactive install: pick clients, register.
+// runWizard drives the interactive install: printers, settings, AI clients,
+// registration. It runs its own full-screen program (the same frame the app
+// uses); once the program ends it prints the finish summary or the cancel line
+// to stdout, so the outcome stays in the terminal scrollback, and a Failure
+// still goes to stderr.
 func runWizard(ctx context.Context, detector *harness.Detector, scope harness.Scope, cmd cli.Command, title string) int {
 	state := &AppState{}
 	steps := []flow.Step[AppState]{
-		wizard.PrintersStep(ctx, printerState, wizard.PrintersStepOptions{Dir: registryDir(scope), DryRun: cmd.DryRun}),
-		wizard.SettingsStep(settingsState, wizard.SettingsStepOptions{DryRun: cmd.DryRun}),
-		wizard.HarnessStep(installer.HarnessStep(ctx, detector, harnessState, installer.HarnessStepOptions{AllDetected: true, Scope: scope}), harnessState),
-		installer.ApplyStep(ctx, detector, harnessState, resultsState, installer.ApplyStepOptions{Scope: scope, DryRun: cmd.DryRun}),
+		wizard.PrintersStep(ctx, printerState, wizard.PrintersStepOptions{Dir: registryDir(scope), DryRun: cmd.DryRun, App: title}),
+		wizard.SettingsStep(settingsState, wizard.SettingsStepOptions{DryRun: cmd.DryRun, App: title}),
+		wizard.ClientsStep(ctx, detector, harnessState, wizard.ClientsStepOptions{AllDetected: true, Scope: scope, DryRun: cmd.DryRun, App: title}),
+		wizard.ApplyStep(ctx, detector, harnessState, resultsState, printerState, settingsState, wizard.ApplyStepOptions{Scope: scope, DryRun: cmd.DryRun, App: title}),
 	}
 	f := flow.New(steps, state)
-	code := tui.Run(ctx, f, tui.Options{Title: title})
+	p := tea.NewProgram(f.Model(), tea.WithContext(ctx), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout), tea.WithAltScreen())
+	if _, err := p.Run(); err != nil && !errors.Is(err, tea.ErrProgramKilled) {
+		fmt.Fprintf(os.Stderr, "  %s: %v\n", domain.ServerName, err)
+		return 1
+	}
+	wizard.PrintOutcome(os.Stdout, wizard.Outcome{
+		DryRun:      cmd.DryRun,
+		Scope:       scope,
+		Width:       state.Width,
+		Failure:     state.Failure,
+		OnApplyStep: f.Steps()[f.Current()].ID() == "apply",
+		Printers:    &state.Printers,
+		Settings:    &state.Settings,
+		Clients:     &state.Harness,
+		Results:     &state.Results,
+	})
 	if state.Failure != nil {
 		fmt.Fprintln(os.Stderr, state.Failure)
 	}
-	return code
+	return f.ExitCode()
 }
 
 func runUnattended(ctx context.Context, detector *harness.Detector, scope harness.Scope, cmd cli.Command, desired harness.DesiredState) int {
@@ -441,67 +460,23 @@ func updateOptions() update.Options {
 	return opts
 }
 
-func newDoctor(ctx context.Context) *doctor.Runner {
-	opts := updateOptions()
-	r := doctor.New(
-		doctorchecks.ExecutableCheck{},
-		doctor.PathCheck{Dir: opts.InstallDir},
-		versionCheck{},
-		clientsCheck{},
-	)
-	if version != "dev" {
-		r.Add(doctor.UpdateCheck{Opts: opts})
-	}
-	// This server's own checks (dev_docs/plan-v0.1.0.md T14): registry,
-	// settings, every enabled printer's reachability, and the background
-	// camera/idle-heat daemon. internal/doctorchecks reads the registry and
-	// settings itself; nothing here writes to either. mcpserver.ToolCatalog
-	// (review backlog item 28) supplies the full registered tool set so
-	// SettingsCheck can flag a tools.overrides name that matches no real
-	// tool, without doctorchecks itself importing mcpserver.
-	r.Add(doctorchecks.Checks(mcpserver.ToolCatalog())...)
-	return r
+// doctorChecks builds the check list the `doctor` command and the app's Doctor
+// screen share (internal/doctorlist).
+func doctorChecks() []doctor.Check {
+	return doctorlist.Checks(doctorlist.Options{
+		Version: version,
+		Update:  updateOptions(),
+		// mcpserver.ToolCatalog (review backlog item 28) supplies the full
+		// registered tool set so the settings check can flag a
+		// tools.overrides name that matches no real tool, without
+		// doctorchecks itself importing mcpserver.
+		Tools:       mcpserver.ToolCatalog(),
+		NewDetector: newDetector,
+	})
 }
 
 func runDoctor(ctx context.Context) int {
-	return newDoctor(ctx).Run(ctx, os.Stdout)
-}
-
-// versionCheck reports this binary's version and how to spot an AI client
-// still running an older server process after an update (field feedback
-// item 4): tool replies that carry the printer state, and list_printers, name
-// the process that answered in their server_version and server_pid fields.
-type versionCheck struct{}
-
-func (versionCheck) Name() string { return "Version" }
-
-func (versionCheck) Run(context.Context) doctor.Result {
-	return doctor.Result{Name: "Version", Status: doctor.OK, Detail: fmt.Sprintf(
-		"%s %s. An AI client keeps the server process it started: if server_version in a tool reply "+
-			"differs from this, restart the AI client (or its MCP connection). Never kill the server process "+
-			"itself: a client may not start it again.", domain.BinaryName, version)}
-}
-
-// clientsCheck lists the AI clients that have this server registered.
-type clientsCheck struct{}
-
-func (clientsCheck) Name() string { return "AI clients" }
-
-func (clientsCheck) Run(ctx context.Context) doctor.Result {
-	detector, err := newDetector(domain.ServerName)
-	if err != nil {
-		return doctor.Result{Name: "AI clients", Status: doctor.Fail, Detail: err.Error()}
-	}
-	var configured []string
-	for _, h := range detector.Detect(ctx) {
-		if h.Configured {
-			configured = append(configured, h.Name)
-		}
-	}
-	if len(configured) == 0 {
-		return doctor.Result{Name: "AI clients", Status: doctor.Warn, Detail: "no client is configured; run `creality-k2-mcp install`"}
-	}
-	return doctor.Result{Name: "AI clients", Status: doctor.OK, Detail: strings.Join(configured, ", ")}
+	return doctor.New(doctorChecks()...).Run(ctx, os.Stdout)
 }
 
 // --- Update ---
@@ -546,23 +521,19 @@ func runUpdate(ctx context.Context, cmd cli.Command) int {
 
 // The interactive app opens when the binary is run bare in a terminal
 // (dev_docs/plan-v0.1.0.md T13b): Printers, Status, Camera, Recordings,
-// Settings, Run doctor, Quit. internal/tui owns every screen; this just
+// Settings, Doctor, Quit. internal/tui owns every screen; this just
 // wires up its dependencies the same way runMCPServer wires up
 // mcpserver.Deps - the registry directory (matching loadMCPRegistry's own
-// cwd-based resolution), the doctor report (the same doctor.Runner the
-// `doctor` command uses) and, when available, the background camera/
+// cwd-based resolution), the doctor check list (the same one the
+// `doctor` command runs) and, when available, the background camera/
 // idle-heat daemon client (matching newWatchdogClient's own "nil means not
 // wired up" contract: an interface field is only ever assigned a non-nil
 // *daemonclient.Client, never a nil one wrapped in a non-nil interface).
 func runApp(ctx context.Context) int {
 	dir, _ := os.Getwd()
 	deps := internaltui.Deps{
-		Dir: dir,
-		RunDoctor: func(ctx context.Context) string {
-			var buf bytes.Buffer
-			newDoctor(ctx).Run(ctx, &buf)
-			return buf.String()
-		},
+		Dir:          dir,
+		DoctorChecks: doctorChecks,
 	}
 	if wd := newWatchdogClient(); wd != nil {
 		deps.Daemon = wd

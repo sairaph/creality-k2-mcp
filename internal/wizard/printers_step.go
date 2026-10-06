@@ -6,11 +6,14 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/sairaph/mcp-wizard/flow"
 	"github.com/sairaph/mcp-wizard/tui"
 
 	"github.com/sairaph/creality-k2-mcp/internal/discovery"
 	"github.com/sairaph/creality-k2-mcp/internal/domain"
+	"github.com/sairaph/creality-k2-mcp/internal/tui/frame"
+	"github.com/sairaph/creality-k2-mcp/internal/userhome"
 )
 
 // PrinterState is embedded in consumer state for the Printers step,
@@ -42,11 +45,21 @@ type PrinterState struct {
 	// "enter" started is in flight, mirroring installer.ApplyStep's Done
 	// gating so a save runs as a tea.Cmd instead of blocking Update.
 	Saving bool
+	// Wrote is true once a real (not dry-run) save reached disk, so the cancel
+	// line after the program can say what was kept.
+	Wrote bool
 
 	Message string
 
 	cancelScan context.CancelFunc
 	progressCh chan discovery.Progress
+
+	// cancelProbe stops the add-host probe; probeGen tags each probe so the
+	// result of a cancelled one is dropped when it arrives late.
+	cancelProbe context.CancelFunc
+	probeGen    int
+
+	tick ticker
 }
 
 // PrintersStepOptions controls the Printers step.
@@ -64,14 +77,17 @@ type PrintersStepOptions struct {
 	// DryRun computes what "enter" would save and shows it instead of writing
 	// the registry, matching installer.ApplyStepOptions.DryRun.
 	DryRun bool
+	// App is the header's first part ("creality-k2-mcp setup", or
+	// "creality-k2-mcp project setup" for add); empty means the install one.
+	App string
 }
 
 // PrintersStep returns a flow.Step that scans the network for Creality K2
 // printers, lets the user pick which are enabled and which may be
 // controlled (not just monitored), and saves the registry on enter
 // (dev_docs/plan-v0.1.0.md decision 4). Discovery runs asynchronously with a
-// spinner and live progress; tui.CheckboxList is only a renderer, so this
-// step owns the cursor and every key itself, the same way HarnessStep does.
+// spinner and live progress; the step owns the cursor, every key and its own
+// row renderer, and draws inside the shared frame.
 func PrintersStep[T any](ctx context.Context, stateFn func(*T) *PrinterState, opts PrintersStepOptions) flow.Step[T] {
 	if opts.Discover == nil {
 		opts.Discover = discovery.Discover
@@ -79,22 +95,23 @@ func PrintersStep[T any](ctx context.Context, stateFn func(*T) *PrinterState, op
 	if opts.Probe == nil {
 		opts.Probe = discovery.ProbeHost
 	}
-	return &printersStep[T]{stateFn: stateFn, opts: opts, ctx: ctx}
+	return &printersStep[T]{stateFn: stateFn, opts: opts, ctx: ctx, chrome: newChrome(opts.App, opts.DryRun)}
 }
 
 type printersStep[T any] struct {
 	stateFn func(*T) *PrinterState
 	opts    PrintersStepOptions
 	ctx     context.Context
+	chrome  chrome
 }
 
 func (s *printersStep[T]) ID() string { return "printers" }
 
 func (s *printersStep[T]) Title(state *T) string {
 	if s.opts.Dir != "" {
-		return fmt.Sprintf("Printers - register in this project (%s), which Creality K2 printers should the AI use?", s.opts.Dir)
+		return fmt.Sprintf("Register in this project (%s): which Creality K2 printers should the AI use?", userhome.Shorten(s.opts.Dir))
 	}
-	return "Printers - which Creality K2 printers should the AI be able to use?"
+	return "Which Creality K2 printers should the AI be able to use?"
 }
 
 func (s *printersStep[T]) Hints(state *T) []struct{ Key, Label string } {
@@ -102,25 +119,46 @@ func (s *printersStep[T]) Hints(state *T) []struct{ Key, Label string } {
 	if ps == nil {
 		return nil
 	}
-	if ps.Saving {
-		return nil // the save is in flight and cannot be cancelled
-	}
-	if ps.Adding {
-		return []struct{ Key, Label string }{
-			{Key: "enter", Label: "probe"},
-			{Key: "esc", Label: "cancel"},
+	return legacyHints(printersHints(ps))
+}
+
+// printersHints is the one key list both Hints and the footer use, so they
+// cannot drift apart. Priorities decide what a narrow footer drops first:
+// rescan, the scan stop, move, add, control; "enter continue" and "q cancel"
+// stay longest. The first step has no back hint, and "esc stop scan" shows
+// only while a scan runs.
+func printersHints(ps *PrinterState) []frame.Hint {
+	switch {
+	case !ps.Ready:
+		return []frame.Hint{frame.Cancel()}
+	case ps.Saving:
+		return busyHints("saving...")
+	case ps.Probing:
+		return []frame.Hint{
+			{Label: "probing...", Priority: 99},
+			{Keys: "esc", Label: "cancel", Priority: frame.PriorityBack},
+			frame.Cancel(),
+		}
+	case ps.Adding:
+		return []frame.Hint{
+			{Keys: "enter", Label: "probe", Priority: 99},
+			{Keys: "esc", Label: "cancel", Priority: frame.PriorityBack},
 		}
 	}
-	return []struct{ Key, Label string }{
-		{Key: "↑↓", Label: "move"},
-		{Key: "space", Label: "enabled"},
-		{Key: "c", Label: "control"},
-		{Key: "m", Label: "add host"},
-		{Key: "r", Label: "rescan"},
-		{Key: "enter", Label: "save & continue"},
-		{Key: "esc", Label: "stop scan"},
-		{Key: "q", Label: "cancel"},
+	hints := []frame.Hint{
+		{Keys: "↑↓", Label: "move", Priority: 60},
+		{Keys: "space", Label: "enable", Priority: 90},
+		{Keys: "c", Label: "control", Priority: 80},
+		{Keys: "m", Label: "add host", Priority: 70},
 	}
+	if !ps.Scanning {
+		hints = append(hints, frame.Hint{Keys: "r", Label: "rescan", Priority: 50})
+	}
+	hints = append(hints, frame.Hint{Keys: "enter", Label: "continue", Priority: 99})
+	if ps.Scanning {
+		hints = append(hints, frame.Hint{Keys: "esc", Label: "stop scan", Priority: 55})
+	}
+	return append(hints, frame.Cancel())
 }
 
 func (s *printersStep[T]) get(state *T) *PrinterState {
@@ -147,6 +185,7 @@ type scanDoneMsg struct {
 }
 
 type probeDoneMsg struct {
+	gen    int
 	merged discovery.MergeResult
 	err    error
 }
@@ -169,8 +208,9 @@ func (s *printersStep[T]) Init(state *T) tea.Cmd {
 	}
 	ps.Dir = s.opts.Dir
 	dir := s.opts.Dir
+	ps.tick.reset()
 	return tea.Batch(
-		tui.Spinner(),
+		ps.tick.start(),
 		func() tea.Msg {
 			reg, path, _, err := domain.LoadRegistry(dir)
 			return registryLoadedMsg{reg: reg, path: path, err: err}
@@ -225,6 +265,9 @@ func (s *printersStep[T]) Update(msg tea.Msg, state *T) (flow.Directive, tea.Cmd
 		return s.handleSaved(ps, m)
 
 	case tea.KeyMsg:
+		if smallDrops(baseStateOf(state), m.String(), ps.Adding && !ps.Probing) {
+			return flow.Continue, nil
+		}
 		if !ps.Ready {
 			if m.String() == "q" || m.String() == "ctrl+c" {
 				return flow.Quit, nil
@@ -237,6 +280,9 @@ func (s *printersStep[T]) Update(msg tea.Msg, state *T) (flow.Directive, tea.Cmd
 			}
 			return flow.Continue, nil
 		}
+		if ps.Probing {
+			return s.updateProbing(m, ps)
+		}
 		if ps.Adding {
 			return s.updateAdding(m, ps)
 		}
@@ -247,15 +293,48 @@ func (s *printersStep[T]) Update(msg tea.Msg, state *T) (flow.Directive, tea.Cmd
 		if base := baseStateOf(state); base != nil {
 			base.Spinner.Frame++
 		}
-		if !ps.Ready || ps.Scanning || ps.Probing || ps.Saving {
-			return flow.Continue, tui.Spinner()
-		}
+		return flow.Continue, ps.tick.next(!ps.Ready || ps.Scanning || ps.Probing || ps.Saving)
 	}
 	return flow.Continue, nil
 }
 
-func (s *printersStep[T]) handleProbeDone(ps *PrinterState, m probeDoneMsg) (flow.Directive, tea.Cmd) {
+// updateProbing handles a key while the add-host probe runs. The probe writes
+// nothing, so it is never Busy: esc cancels it and stays in the field, q
+// cancels the probe and the setup, ctrl+c quits; every other key is ignored.
+func (s *printersStep[T]) updateProbing(m tea.KeyMsg, ps *PrinterState) (flow.Directive, tea.Cmd) {
+	switch m.String() {
+	case "esc":
+		s.stopProbe(ps)
+		ps.Message = ""
+	case "q", "ctrl+c":
+		s.stopProbe(ps)
+		if ps.cancelScan != nil {
+			ps.cancelScan()
+		}
+		return flow.Quit, nil
+	}
+	return flow.Continue, nil
+}
+
+// stopProbe cancels the running probe and invalidates its result.
+func (s *printersStep[T]) stopProbe(ps *PrinterState) {
+	if ps.cancelProbe != nil {
+		ps.cancelProbe()
+		ps.cancelProbe = nil
+	}
+	ps.probeGen++
 	ps.Probing = false
+}
+
+func (s *printersStep[T]) handleProbeDone(ps *PrinterState, m probeDoneMsg) (flow.Directive, tea.Cmd) {
+	if m.gen != ps.probeGen || !ps.Probing {
+		return flow.Continue, nil
+	}
+	ps.Probing = false
+	if ps.cancelProbe != nil {
+		ps.cancelProbe()
+		ps.cancelProbe = nil
+	}
 	if m.err != nil {
 		ps.Message = m.err.Error()
 		return flow.Continue, nil
@@ -289,9 +368,10 @@ func (s *printersStep[T]) handleSaved(ps *PrinterState, m printersSavedMsg) (flo
 	ps.Registry = m.reg
 	ps.Path = m.path
 	if m.dryRun {
-		ps.Message = fmt.Sprintf("Dry run: would write %d printer(s) to %s", len(m.reg.Printers), m.path)
+		ps.Message = fmt.Sprintf("Dry run: would write %d printer(s) to %s", len(m.reg.Printers), userhome.Shorten(m.path))
 	} else {
 		ps.Message = ""
+		ps.Wrote = true
 	}
 	return flow.Next, nil
 }
@@ -320,9 +400,12 @@ func (s *printersStep[T]) updateList(m tea.KeyMsg, ps *PrinterState) (flow.Direc
 			return flow.Continue, s.startScan(ps)
 		}
 	case "enter":
+		if ps.cancelScan != nil {
+			ps.cancelScan()
+		}
 		ps.Saving = true
 		ps.Message = ""
-		return flow.Continue, s.saveCmd(ps)
+		return flow.Continue, tea.Batch(ps.tick.start(), s.saveCmd(ps))
 	case "esc":
 		if ps.Scanning {
 			if ps.cancelScan != nil {
@@ -356,7 +439,7 @@ func (s *printersStep[T]) updateAdding(m tea.KeyMsg, ps *PrinterState) (flow.Dir
 		}
 		ps.Probing = true
 		ps.Message = ""
-		return flow.Continue, tea.Batch(tui.Spinner(), s.probeCmd(ps, host))
+		return flow.Continue, tea.Batch(ps.tick.start(), s.probeCmd(ps, host))
 	case "backspace":
 		if len(ps.Input) > 0 {
 			r := []rune(ps.Input)
@@ -409,7 +492,7 @@ func (s *printersStep[T]) startScan(ps *PrinterState) tea.Cmd {
 		return scanDoneMsg{report: report, merged: merged}
 	}
 
-	return tea.Batch(tui.Spinner(), scanCmd, s.watchProgress(ps))
+	return tea.Batch(ps.tick.start(), scanCmd, s.watchProgress(ps))
 }
 
 func (s *printersStep[T]) watchProgress(ps *PrinterState) tea.Cmd {
@@ -429,13 +512,19 @@ func (s *printersStep[T]) watchProgress(ps *PrinterState) tea.Cmd {
 func (s *printersStep[T]) probeCmd(ps *PrinterState, host string) tea.Cmd {
 	probe := s.opts.Probe
 	reg := ps.Registry
-	ctx := s.ctx
+	if ps.cancelProbe != nil {
+		ps.cancelProbe()
+	}
+	ctx, cancel := context.WithCancel(s.ctx)
+	ps.cancelProbe = cancel
+	ps.probeGen++
+	gen := ps.probeGen
 	return func() tea.Msg {
 		_, merged, err := ProbeAndMerge(ctx, probe, host, 0, reg)
 		if err != nil {
-			return probeDoneMsg{err: err}
+			return probeDoneMsg{gen: gen, err: err}
 		}
-		return probeDoneMsg{merged: merged}
+		return probeDoneMsg{gen: gen, merged: merged}
 	}
 }
 
@@ -468,114 +557,133 @@ func (s *printersStep[T]) View(state *T) string {
 	if ps == nil {
 		return ""
 	}
+	base := baseStateOf(state)
+	return s.chrome.draw(base, "Printers", 1, printersHints(ps), func(w, rows int) []string {
+		return s.body(ps, spinnerFrame(base), w, rows)
+	})
+}
 
-	frame := 0
-	if base := baseStateOf(state); base != nil {
-		frame = base.Spinner.Frame
-	}
+// body is the step's screen between the header and the footer: the question,
+// what is happening (loading, scanning, saving), the printer rows and the
+// notes under them. Only the rows scroll, so the notes stay visible.
+func (s *printersStep[T]) body(ps *PrinterState, spin, w, rows int) []string {
+	glyph := frame.Spinner(spin)
 
 	if !ps.Ready {
-		return tui.Section(tui.DefaultTheme, "", fmt.Sprintf("  %s Loading the printer registry...\n", tui.SpinFrame(frame)))
+		return append(questionLines(w, s.Title(nil)), frame.Gutter+glyph+" Loading the printer registry...")
 	}
-
-	var b strings.Builder
 
 	if ps.Adding {
-		b.WriteString("  Host name or IP address of the printer:\n\n")
-		b.WriteString(tui.TextInput(ps.Input, "e.g. 192.168.1.50", false))
-		b.WriteString("\n")
-		if ps.Probing {
-			fmt.Fprintf(&b, "\n  %s Probing...\n", tui.SpinFrame(frame))
-		}
-		if ps.Message != "" {
-			b.WriteString("\n  " + ps.Message)
-		}
-		b.WriteString("\n" + tui.Footer(tui.DefaultTheme, tui.Hints(tui.DefaultTheme,
-			tui.Hint{Key: "enter", Label: "probe"},
-			tui.Hint{Key: "esc", Label: "cancel"},
-		)))
-		return tui.Section(tui.DefaultTheme, s.Title(state), b.String())
-	}
-
-	if ps.Scanning {
-		if ps.Total > 0 {
-			fmt.Fprintf(&b, "  %s Scanning the network... %d/%d hosts, %d found\n\n", tui.SpinFrame(frame), ps.Scanned, ps.Total, ps.Found)
+		out := questionLines(w, "Host name or IP address of the printer:")
+		if ps.Input == "" {
+			out = append(out, frame.Gutter+frame.StyleDim.Render("e.g. 192.168.1.50")+"_")
 		} else {
-			fmt.Fprintf(&b, "  %s Scanning the network...\n\n", tui.SpinFrame(frame))
+			out = append(out, frame.Gutter+ps.Input+"_")
 		}
+		if ps.Probing {
+			out = append(out, "", frame.Gutter+glyph+" Probing...")
+		}
+		return append(out, noteLines(w, ps.Message)...)
 	}
 
-	if ps.Saving {
+	out := questionLines(w, s.Title(nil))
+	switch {
+	case ps.Saving:
 		verb := "Saving the printer registry..."
 		if s.opts.DryRun {
 			verb = "Computing what would be written..."
 		}
-		fmt.Fprintf(&b, "  %s %s\n\n", tui.SpinFrame(frame), verb)
+		out = append(out, frame.Gutter+glyph+" "+verb, "")
+	case ps.Scanning && ps.Total > 0:
+		out = append(out, fmt.Sprintf("%s%s Scanning the network... %d/%d hosts, %d found", frame.Gutter, glyph, ps.Scanned, ps.Total, ps.Found), "")
+	case ps.Scanning:
+		out = append(out, frame.Gutter+glyph+" Scanning the network...", "")
 	}
 
-	items := make([]tui.CheckboxItem, len(ps.Rows))
-	selected := make(map[string]bool, len(ps.Rows))
-	for i, row := range ps.Rows {
-		items[i] = tui.CheckboxItem{ID: row.key(), Name: displayName(row)}
-		if row.Addable {
-			selected[row.key()] = row.Printer.Enabled
-		}
-	}
-	rows := ps.Rows
-	selectable := func(i int) bool {
-		if i < 0 || i >= len(rows) {
-			return false
-		}
-		return rows[i].Addable
-	}
-	statusFn := func(i int) string {
-		if i < 0 || i >= len(rows) {
-			return ""
-		}
-		row := rows[i]
-		if !row.Addable {
-			return row.Reason
-		}
-		control := "off"
-		if row.Printer.AllowControl {
-			control = "on"
-		}
-		origin := "registered"
-		if !row.Existing {
-			origin = "new"
-		}
-		return fmt.Sprintf("%s  control: %-3s  %s", row.Printer.Host, control, origin)
-	}
-
-	b.WriteString(tui.CheckboxList(tui.DefaultTheme, items, ps.Cursor, selected, selectable, statusFn, true, 0))
-
+	var tail []string
 	if len(ps.Rows) == 0 && !ps.Scanning {
-		b.WriteString("  No printers found. Press m to add one by host name or IP, or r to rescan.\n")
+		tail = append(tail, frame.Wrap(w, frame.Gutter, "No printers found yet. Press m to add one by its address, or r to scan again.")...)
 	}
 	if ps.ScanErr != "" {
-		b.WriteString("\n  scan error: " + ps.ScanErr)
+		tail = append(tail, "")
+		for _, line := range frame.Wrap(w, frame.Gutter, "Scan error: "+ps.ScanErr) {
+			tail = append(tail, frame.StyleError.Render(line))
+		}
 	}
 	if ps.Partial && !ps.Scanning {
-		b.WriteString("\n  The last scan did not finish within its time budget; press r to scan again.")
+		tail = append(tail, "")
+		for _, line := range frame.Wrap(w, frame.Gutter, "The last scan did not finish within its time budget; press r to scan again.") {
+			tail = append(tail, frame.StyleWarn.Render(line))
+		}
 	}
-	if ps.Message != "" {
-		b.WriteString("\n\n  " + ps.Message)
-	}
+	tail = append(tail, noteLines(w, ps.Message)...)
 
-	b.WriteString("\n" + tui.Footer(tui.DefaultTheme, tui.Hints(tui.DefaultTheme,
-		tui.Hint{Key: "↑↓", Label: "move"},
-		tui.Hint{Key: "space", Label: "enabled"},
-		tui.Hint{Key: "c", Label: "control"},
-		tui.Hint{Key: "m", Label: "add host"},
-		tui.Hint{Key: "r", Label: "rescan"},
-		tui.Hint{Key: "enter", Label: "save & continue"},
-		tui.Hint{Key: "esc", Label: "stop scan"},
-		tui.Hint{Key: "q", Label: "cancel"},
-	)))
-	return tui.Section(tui.DefaultTheme, s.Title(state), b.String())
+	avail := max(rows-len(out)-len(tail), 1)
+	out = append(out, listWindow(printerBlocks(ps, w), ps.Cursor, avail)...)
+	return append(out, tail...)
 }
 
-// --- free helpers (own the cursor and keys; tui.CheckboxList only renders) ---
+// noteLines is a blank row and then msg wrapped in the attention colour; it
+// is empty when there is no message.
+func noteLines(w int, msg string) []string {
+	if msg == "" {
+		return nil
+	}
+	out := []string{""}
+	for _, line := range frame.Wrap(w, frame.Gutter, msg) {
+		out = append(out, frame.StyleWarn.Render(line))
+	}
+	return out
+}
+
+// printerBlocks renders one block of lines per row: the marker, the enabled
+// glyph, the name, the host, the control state and where the entry came from;
+// on a narrow terminal the origin goes first, then the control state. A row
+// that cannot be added gets its reason on a second, dim line.
+func printerBlocks(ps *PrinterState, w int) [][]string {
+	nameW, hostW := 0, 0
+	for _, row := range ps.Rows {
+		nameW = max(nameW, ansi.StringWidth(displayName(row)))
+		hostW = max(hostW, ansi.StringWidth(row.Printer.Host))
+	}
+	nameW = min(nameW, 28)
+
+	blocks := make([][]string, len(ps.Rows))
+	for i, row := range ps.Rows {
+		marker := frame.Marker(i == ps.Cursor)
+		name := frame.Pad(ansi.Truncate(displayName(row), nameW, "~"), nameW)
+		if !row.Addable {
+			blocks[i] = []string{marker + frame.StyleDim.Render("-") + " " + name}
+			for _, line := range frame.Wrap(w, frame.Gutter+"    ", row.Reason) {
+				blocks[i] = append(blocks[i], frame.StyleDim.Render(line))
+			}
+			continue
+		}
+		glyph := frame.StyleDim.Render("○")
+		if row.Printer.Enabled {
+			glyph = frame.StyleOK.Render("●")
+		}
+		control := frame.StyleDim.Render("control off")
+		if row.Printer.AllowControl {
+			control = frame.StyleWarn.Render("control on ")
+		}
+		origin := frame.StyleDim.Render("registered")
+		if !row.Existing {
+			origin = frame.StyleDim.Render("new")
+		}
+		line := marker + glyph + " " + name + "  " + frame.Pad(row.Printer.Host, hostW)
+		for _, part := range []string{control, origin} {
+			if ansi.StringWidth(line+"  "+part) > w-1 {
+				break
+			}
+			line += "  " + part
+		}
+		blocks[i] = []string{line}
+	}
+	return blocks
+}
+
+// --- free helpers (own the cursor and keys; printerBlocks only renders) ---
 
 // CurrentRow returns a pointer to the row under the cursor, or nil.
 func CurrentRow(ps *PrinterState) *PrinterRow {
