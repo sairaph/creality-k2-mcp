@@ -188,3 +188,28 @@ func TestHeatingWithAStaleSelfTestIsNotAStart(t *testing.T) {
 		}
 	}
 }
+
+// Live capture 2026-10-06 (v0.3.1 live test 4): a filament load from the
+// printer screen reports feedState 101 with deviceState 0, homes, sets
+// idle_timeout Printing and heats the nozzle to 250. With the stale
+// withSelfTest 0 of field item 6 it must not be a print start.
+func TestScreenLoadSignatureWithStaleSelfTestIsNotAStart(t *testing.T) {
+	for _, prev := range []string{"standby", "complete", "cancelled"} {
+		for _, homing := range []bool{true, false} {
+			s := cfsIdle(t)
+			s.PrintStats.State = prev
+			s.WS9999 = stuckWS9999(t)
+			s.WS9999.FeedState = present(101)
+			s.IdleTimeout.State = strPtr("Printing")
+			s.MotorControl.IsHoming = boolPtr(homing)
+			withTargets(&s, 250, 0)
+			d := DeriveActivityState(s, nil)
+			if d.StartWindow || d.State == StatePreparing {
+				t.Errorf("%s, homing %v: %s/%s window %v %v, want no start window", prev, homing, d.State, d.Bucket, d.StartWindow, d.Reasons)
+			}
+			if d.Bucket == BucketI {
+				t.Errorf("%s, homing %v: bucket I during a load", prev, homing)
+			}
+		}
+	}
+}

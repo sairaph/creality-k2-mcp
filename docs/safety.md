@@ -353,7 +353,11 @@ cancelled and port 9999 answering:
 - the self-test progress is not finished while the printer shows activity in the same
   read: a 9999 state of 9, 1 or 7, a deviceState other than 0, or idle_timeout
   Printing. Heater targets alone do not count, so heating an idle printer never opens
-  a start window. A filament load or unload (deviceState 10 or 11) is never a start.
+  a start window. Filament moving is never a start: deviceState 10 or 11, or the CFS
+  feeder not at rest (a load from the printer screen reports feedState 101 to 107 with
+  deviceState 0 while it homes and heats). With a leftover self-test value, the last
+  second of such a load, when the feeder is already at rest but the printer still reports
+  motion, can show `preparing` briefly; it clears by itself.
 
 A leftover value alone never counts. After a printer power cycle the self-test progress
 was seen reading 0 at rest for more than a day, and a filament map that is not the
